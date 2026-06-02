@@ -1,9 +1,21 @@
 import { useState, useEffect, useRef } from 'react';
-import { createClient } from '@supabase/supabase-js';
+import { initializeApp, getApps, getApp } from 'firebase/app';
+import { getFirestore, collection, addDoc, doc, getDoc, getDocs, query, where, orderBy } from 'firebase/firestore';
+import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
+// Inline programmatic initialization of Firebase SDK matching Vercel configurations
+const firebaseConfig = {
+  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
+  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID
+};
+
+const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
+const db = getFirestore(app);
+const storage = getStorage(app);
 
 export default function DispcamApp() {
   // Navigation & Session States
@@ -13,7 +25,7 @@ export default function DispcamApp() {
   // Host Configuration States
   const [eventName, setEventName] = useState('');
   const [duration, setDuration] = useState('2');
-  const [maxPhotos, setMaxPhotos] = useState('10'); // New: Limit per individual
+  const [maxPhotos, setMaxPhotos] = useState('10');
   const [generatedLink, setGeneratedLink] = useState('');
 
   // Guest & Real-time Lens States
@@ -23,7 +35,7 @@ export default function DispcamApp() {
   const [uploading, setUploading] = useState(false);
   const [timeLeft, setTimeLeft] = useState('');
   
-  // Hardware Camera Refs
+  // Hardware Camera Viewport Reference Layers
   const videoRef = useRef(null);
   const streamRef = useRef(null);
 
@@ -66,7 +78,7 @@ export default function DispcamApp() {
   const startCameraHardware = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: "environment" } }, // Forces back/rear camera
+        video: { facingMode: { ideal: "environment" } },
         audio: false
       });
       if (videoRef.current) {
@@ -78,7 +90,6 @@ export default function DispcamApp() {
     }
   };
 
-  // Safely kill lens power when complete
   const stopCameraHardware = () => {
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => track.stop());
@@ -86,16 +97,25 @@ export default function DispcamApp() {
   };
 
   const evaluateRoomRoute = async (idToTrack) => {
-    const { data, error } = await supabase.from('events').select('*').eq('id', idToTrack).single();
-    if (error || !data) {
-      alert("Darkroom session profile not found.");
-      return;
-    }
-    setEventData(data);
-    if (new Date() > new Date(data.reveal_at)) {
-      loadDevelopedGallery(data.id);
-    } else {
-      setView('join');
+    try {
+      const docRef = doc(db, 'events', idToTrack);
+      const docSnap = await getDoc(docRef);
+      
+      if (!docSnap.exists()) {
+        alert("Darkroom session profile not found.");
+        return;
+      }
+      
+      const data = { id: docSnap.id, ...docSnap.data() };
+      setEventData(data);
+      
+      if (new Date() > new Date(data.reveal_at)) {
+        loadDevelopedGallery(data.id);
+      } else {
+        setView('join');
+      }
+    } catch (e) {
+      alert("Error tracking event session setup.");
     }
   };
 
@@ -106,33 +126,29 @@ export default function DispcamApp() {
     const revealAt = new Date();
     revealAt.setHours(revealAt.getHours() + parseInt(duration));
 
-    // Store the custom photo cap directly inside description/metadata or use a default field setup
-    const { data, error } = await supabase
-      .from('events')
-      .insert([{ name: eventName, reveal_at: revealAt.toISOString(), max_photos_limit: parseInt(maxPhotos) }])
-      .select().single();
+    try {
+      const docRef = await addDoc(collection(db, 'events'), {
+        name: eventName,
+        reveal_at: revealAt.toISOString(),
+        max_photos_limit: parseInt(maxPhotos),
+        created_at: new Date().toISOString()
+      });
 
-    if (error) {
-      // Fallback fallback if you haven't migrated database columns yet: we append limit parameters to url safely
-      const mockId = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15);
-      const { data: fallbackData } = await supabase.from('events').insert([{ name: eventName, reveal_at: revealAt.toISOString() }]).select().single();
-      const roomUrl = `${window.location.origin}?room=${fallbackData?.id || mockId}&limit=${maxPhotos}`;
+      const roomUrl = `${window.location.origin}?room=${docRef.id}`;
       setGeneratedLink(roomUrl);
-    } else {
-      const roomUrl = `${window.location.origin}?room=${data.id}`;
-      setGeneratedLink(roomUrl);
+    } catch (error) {
+      alert("Error building darkroom collection mapping profile: " + error.message);
     }
   };
 
-  // Capture current stream video frame directly to memory frame and ship raw binary package
+  // Capture current video stream canvas context framework frame and push raw data payload straight to bucket storage
   const handleShutterSnap = async () => {
     if (uploading) return;
     
-    // Get dynamic limits from URL context or database profile mapping
     const params = new URLSearchParams(window.location.search);
-    const limitFromUrl = parseInt(params.get('limit')) || eventData?.max_photos_limit || 10;
+    const limitConstraint = parseInt(params.get('limit')) || eventData?.max_photos_limit || 10;
 
-    if (photoCount >= limitFromUrl) {
+    if (photoCount >= limitConstraint) {
       alert("Out of film! Your personal disposable roll is empty.");
       return;
     }
@@ -148,37 +164,52 @@ export default function DispcamApp() {
       const ctx = canvas.getContext('2d');
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       
-      // Convert frame context straight to target binary blob
       const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.85));
-      const pathName = `${eventData.id}/${Date.now()}-${Math.random().toString(36).substring(7)}.jpg`;
+      const fileId = `${Date.now()}-${Math.random().toString(36).substring(7)}`;
+      const storagePath = `once-films/${eventData.id}/${fileId}.jpg`;
+      
+      // Upload raw file bytes stream to Firebase Cloud Storage storage system bucket
+      const storageRef = ref(storage, storagePath);
+      await uploadBytes(storageRef, blob);
 
-      const { error: uploadError } = await supabase.storage
-        .from('once-films')
-        .upload(pathName, blob, { contentType: 'image/jpeg' });
+      // Save structural transaction document index log inside Firestore collection map metadata storage
+      await addDoc(collection(db, 'photos'), {
+        event_id: eventData.id,
+        guest_name: guestName,
+        storage_path: storagePath,
+        created_at: new Date().toISOString()
+      });
 
-      if (!uploadError) {
-        await supabase.from('photos').insert([
-          { event_id: eventData.id, guest_name: guestName, storage_path: pathName }
-        ]);
-        setPhotoCount(prev => prev + 1);
-      } else {
-        alert("Chemical exposure misfire. Retake required.");
-      }
+      setPhotoCount(prev => prev + 1);
     } catch (err) {
-      alert("Capture tracking error.");
+      alert("Chemical exposure snapshot handling error encountered.");
     }
     setUploading(false);
   };
 
   const loadDevelopedGallery = async (idToFetch) => {
-    const { data } = await supabase
-      .from('photos')
-      .select('*')
-      .eq('event_id', idToFetch)
-      .order('created_at', { ascending: false });
-    
-    if (data) setPhotos(data);
-    setView('gallery');
+    try {
+      const q = query(
+        collection(db, 'photos'), 
+        where('event_id', '==', idToFetch),
+        orderBy('created_at', 'desc')
+      );
+      const querySnapshot = await getDocs(q);
+      
+      const photosList = [];
+      for (const docSnap of querySnapshot.docs) {
+        const data = docSnap.data();
+        // Generate secure downloadable display public URL pointers from Storage pointers
+        const fileRef = ref(storage, data.storage_path);
+        const downloadUrl = await getDownloadURL(fileRef);
+        photosList.push({ id: docSnap.id, downloadUrl, ...data });
+      }
+      
+      setPhotos(photosList);
+      setView('gallery');
+    } catch (e) {
+      alert("Failed compiling visual processing layer.");
+    }
   };
 
   const handleEnterCamera = () => {
@@ -189,7 +220,6 @@ export default function DispcamApp() {
     }, 100);
   };
 
-  // Compute active target bounds
   const getActiveLimit = () => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
@@ -298,17 +328,12 @@ export default function DispcamApp() {
             <p className="text-lg font-mono font-light text-amber-500 mt-1">{timeLeft || 'Developing soon...'}</p>
           </header>
 
-          {/* Core Hardware Canvas Viewport Box */}
           <div className="w-full aspect-[3/4] border border-[#1C1C1E] bg-black rounded-2xl relative overflow-hidden shadow-inner flex items-center justify-center">
             <video 
-              ref={videoRef} 
-              autoPlay 
-              playsInline 
-              muted 
+              ref={videoRef} autoPlay playsInline muted 
               className="w-full h-full object-cover filter saturate-[1.05] contrast-[1.02]"
             />
             
-            {/* The X / Y Mechanical Exposure Tracker */}
             <div className="absolute top-6 right-6 font-mono text-base tracking-wider text-amber-500 bg-black/80 border border-neutral-800 px-3 py-1 rounded-md backdrop-blur-md">
               {photoCount} / {getActiveLimit()}
             </div>
@@ -348,20 +373,17 @@ export default function DispcamApp() {
             <div className="text-center py-20 text-neutral-600 font-light text-sm">No captures survived chemical development.</div>
           ) : (
             <main className="grid grid-cols-2 sm:grid-cols-3 gap-4">
-              {photos.map((photo) => {
-                const storageUrl = `${supabaseUrl}/storage/v1/object/public/once-films/${photo.storage_path}`;
-                return (
-                  <div key={photo.id} className="group relative bg-[#121214] border border-[#1C1C1E] rounded-xl overflow-hidden shadow-xl">
-                    <img 
-                      src={storageUrl} alt="Developed source" 
-                      className="w-full aspect-[3/4] object-cover"
-                    />
-                    <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 to-transparent p-3 pt-8">
-                      <p className="text-xs text-neutral-300">By <span className="text-white font-medium">{photo.guest_name}</span></p>
-                    </div>
+              {photos.map((photo) => (
+                <div key={photo.id} className="group relative bg-[#121214] border border-[#1C1C1E] rounded-xl overflow-hidden shadow-xl">
+                  <img 
+                    src={photo.downloadUrl} alt="Developed source" 
+                    className="w-full aspect-[3/4] object-cover"
+                  />
+                  <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 to-transparent p-3 pt-8">
+                    <p className="text-xs text-neutral-300">By <span className="text-white font-medium">{photo.guest_name}</span></p>
                   </div>
-                );
-              })}
+                </div>
+              ))}
             </main>
           )}
         </div>
