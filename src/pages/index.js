@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getFirestore, collection, addDoc, doc, getDoc, getDocs, query, where, orderBy } from 'firebase/firestore';
+import { getFirestore, collection, addDoc, doc, getDoc, getDocs, query, where } from 'firebase/firestore';
 import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 
 // Inline programmatic initialization of Firebase SDK matching Vercel configurations
@@ -86,7 +86,7 @@ export default function DispcamApp() {
         streamRef.current = stream;
       }
     } catch (err) {
-      alert("Camera initialization failed. Please grant hardware permissions.");
+      alert("Camera access denied. Please grant camera permissions in your browser settings.");
     }
   };
 
@@ -102,7 +102,7 @@ export default function DispcamApp() {
       const docSnap = await getDoc(docRef);
       
       if (!docSnap.exists()) {
-        alert("Darkroom session profile not found.");
+        alert("Event not found. Check that the link is correct.");
         return;
       }
       
@@ -115,7 +115,7 @@ export default function DispcamApp() {
         setView('join');
       }
     } catch (e) {
-      alert("Error tracking event session setup.");
+      alert("Error loading event: " + e.message);
     }
   };
 
@@ -137,7 +137,7 @@ export default function DispcamApp() {
       const roomUrl = `${window.location.origin}?room=${docRef.id}`;
       setGeneratedLink(roomUrl);
     } catch (error) {
-      alert("Error building darkroom collection mapping profile: " + error.message);
+      alert("Error creating event: " + error.message);
     }
   };
 
@@ -149,7 +149,7 @@ export default function DispcamApp() {
     const limitConstraint = parseInt(params.get('limit')) || eventData?.max_photos_limit || 10;
 
     if (photoCount >= limitConstraint) {
-      alert("Out of film! Your personal disposable roll is empty.");
+      alert("Out of film! All " + getActiveLimit() + " shots have been used.");
       return;
     }
 
@@ -165,6 +165,9 @@ export default function DispcamApp() {
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       
       const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.85));
+      if (!blob) {
+        throw new Error("Failed to capture image from camera feed");
+      }
       const fileId = `${Date.now()}-${Math.random().toString(36).substring(7)}`;
       const storagePath = `once-films/${eventData.id}/${fileId}.jpg`;
       
@@ -182,7 +185,7 @@ export default function DispcamApp() {
 
       setPhotoCount(prev => prev + 1);
     } catch (err) {
-      alert("Chemical exposure snapshot handling error encountered.");
+      alert("Failed to capture photo: " + err.message + (err.code ? " (" + err.code + ")" : ""));
     }
     setUploading(false);
   };
@@ -191,8 +194,7 @@ export default function DispcamApp() {
     try {
       const q = query(
         collection(db, 'photos'), 
-        where('event_id', '==', idToFetch),
-        orderBy('created_at', 'desc')
+        where('event_id', '==', idToFetch)
       );
       const querySnapshot = await getDocs(q);
       
@@ -205,10 +207,13 @@ export default function DispcamApp() {
         photosList.push({ id: docSnap.id, downloadUrl, ...data });
       }
       
+      // Sort photos newest-first client-side (avoids needing a composite Firestore index)
+      photosList.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+      
       setPhotos(photosList);
       setView('gallery');
     } catch (e) {
-      alert("Failed compiling visual processing layer.");
+      alert("Failed to load gallery: " + e.message);
     }
   };
 
