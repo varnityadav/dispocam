@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import QRCode from 'qrcode';
 import { supabase } from '../lib/supabase';
+import Landing from '../components/Landing';
 
 // Cloudflare R2 upload worker — signs presigned URLs for direct browser uploads.
 // Set via NEXT_PUBLIC_R2_WORKER_URL in .env.local (deploy from /workers).
@@ -13,8 +14,8 @@ const MEDIA_BASE_URL = process.env.NEXT_PUBLIC_MEDIA_BASE_URL || '';
 const NOT_CONFIGURED = 'Missing Supabase or R2 configuration. Check your .env.local and build.';
 
 export default function DispcamApp() {
-  // Navigation & Session States
-  const [view, setView] = useState('host'); // 'host' | 'join' | 'camera' | 'gallery'
+  // Navigation & Session States — 'landing' is the new home page; ?room= deep links are routed by the effect below
+  const [view, setView] = useState('landing'); // 'landing' | 'host' | 'join' | 'camera' | 'gallery'
   const [eventId, setEventId] = useState('');
   
   // Host Configuration States
@@ -309,8 +310,21 @@ export default function DispcamApp() {
     return 10;
   };
 
+  const handleEnterApp = () => {
+    if (typeof window !== 'undefined') window.scrollTo(0, 0);
+    setView('host');
+  };
+
   return (
-    <div className="min-h-screen bg-[#0A0A0A] text-[#F5F5F7] flex flex-col justify-center items-center p-4 font-sans antialiased">
+    <>
+      {/* LANDING PAGE — the new home (skipped when arriving via a ?room= link) */}
+      {view === 'landing' && (
+        <Landing onCreateEvent={handleEnterApp} />
+      )}
+
+      {/* APP VIEWS */}
+      {view !== 'landing' && (
+      <div className="min-h-screen bg-[#0A0A0A] text-[#F5F5F7] flex flex-col justify-center items-center p-4 font-sans antialiased">
       
       {/* VIEW 1: HOST ENTRY DASHBOARD */}
       {view === 'host' && (
@@ -512,6 +526,8 @@ export default function DispcamApp() {
           )}
         </div>
       )}
-    </div>
+      </div>
+      )}
+    </>
   );
 }
