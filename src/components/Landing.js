@@ -2,21 +2,22 @@ import { useState, useEffect, useRef } from 'react';
 import QRCode from 'qrcode';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Placeholder photography — swap these for real R2 photos later.
-// Each URL is a verified Unsplash image ID.
+// Photography:
+//  - ONCE_HERO: once.film's actual hero cutouts (hand holding phone + phone + photo), Framer CDN
+//  - LOEWE: photos taken from the Loewe website (Demandware CDN, all verified live)
+// Swap these for real R2 photos later.
 // ─────────────────────────────────────────────────────────────────────────────
-const IMG = (id, w = 1000) => `https://images.unsplash.com/${id}?w=${w}&q=80&auto=format&fit=crop`;
+const LOEWE = {
+  campaign1: 'https://www.loewe.com/dw/image/v2/BBPC_PRD/on/demandware.static/-/Library-Sites-LOW_SharedLibrary/default/dw465c85a3/00000%20FW26%20PRECO/MAIN%20CAMPAIGN/LOEWE_FW26_PRECO_CAMPAIGN_ISLA_JOHNSTON_sRGB_CROPPED_36_3x4.jpg?sw=900&sfrm=jpg',
+  campaign2: 'https://www.loewe.com/dw/image/v2/BBPC_PRD/on/demandware.static/-/Library-Sites-LOW_SharedLibrary/default/dw120a234d/00000%20FW26%20PRECO/MAIN%20CAMPAIGN/LOEWE_FW26_PRECO_CAMPAIGN_SEYDOU_SARR_sRGB_CROPPED_33_3x4.jpg?sw=900&sfrm=jpg',
+  rtw: 'https://www.loewe.com/dw/image/v2/BBPC_PRD/on/demandware.static/-/Library-Sites-LOW_SharedLibrary/default/dw04049853/00000%20FW26%20PRECO/SECONDARY%20CONTENT/LOEWE_FW26_PRECO_NEW_RTW_AND_SHOES_RGB_CROPPED_1_3x4.jpg?sw=900&sfrm=jpg',
+  amazona: 'https://www.loewe.com/dw/image/v2/BBPC_PRD/on/demandware.static/-/Sites-Loewe_master/default/dw23813955/images_rd/H526Y18LBA/H526Y18LBA-3110/H526Y18LBA_3110_1A.jpg?sw=900&q=90',
+  puzzle: 'https://www.loewe.com/dw/image/v2/BBPC_PRD/on/demandware.static/-/Sites-Loewe_master/default/dw65f74ffd/images_rd/H526Y14KOG/H526Y14KOG-2999/H526Y14KOG_2999_1A.jpg?sw=900&q=90',
+};
 
-const PHOTOS = {
-  wedding:  IMG('photo-1519741497674-611481863552'),
-  birthday: IMG('photo-1558636508-e0db3814bd1d'),
-  party:    IMG('photo-1513151233558-d860c5398176'),
-  trip:     IMG('photo-1507525428034-b723cf961d3e'),
-  everyday: IMG('photo-1495954484750-af469f2f9be5'),
-  heroConfetti: IMG('photo-1492684223066-81342ee5ff30'),
-  heroToast:    IMG('photo-1469371670807-013ccf25f16a'),
-  heroCrowd:    IMG('photo-1470225620780-dba8ba36b745'),
-  heroRoad:     IMG('photo-1500530855697-b586d89ba3ee'),
+const ONCE_HERO = {
+  hand: 'https://framerusercontent.com/images/A2ETSqowwVCip7gmjzRg3HUf38U.png',
+  phone: 'https://framerusercontent.com/images/xuNve9xG0Hr2fNU3RQQanJvL0bg.png',
 };
 
 const NAV_LINKS = [
@@ -26,11 +27,11 @@ const NAV_LINKS = [
 ];
 
 const USE_CASES = [
-  { name: 'Wedding',   photo: PHOTOS.wedding,   note: 'Every guest becomes your second photographer.' },
-  { name: 'Birthday',  photo: PHOTOS.birthday,  note: 'Candles, chaos, and the shots you’d never take.' },
-  { name: 'Party',     photo: PHOTOS.party,     note: 'The dance floor through thirty pairs of eyes.' },
-  { name: 'Trip',      photo: PHOTOS.trip,      note: 'One roll shared across the whole crew.' },
-  { name: 'Everyday',  photo: PHOTOS.everyday,  note: 'The unremarkable days worth remembering.' },
+  { name: 'Wedding',   photo: LOEWE.campaign1, note: 'Every guest becomes your second photographer.' },
+  { name: 'Birthday',  photo: LOEWE.campaign2, note: 'Candles, chaos, and the shots you’d never take.' },
+  { name: 'Party',     photo: LOEWE.rtw,       note: 'The dance floor through thirty pairs of eyes.' },
+  { name: 'Trip',      photo: LOEWE.amazona,   note: 'One roll shared across the whole crew.' },
+  { name: 'Everyday',  photo: LOEWE.puzzle,    note: 'The unremarkable days worth remembering.' },
 ];
 
 const STEPS = [
@@ -252,32 +253,34 @@ export default function Landing({ onCreateEvent }) {
             </p>
           </div>
 
-          {/* Loewe-style photo collage */}
-          <div className="relative h-[440px] md:h-[520px] select-none" data-hero-zoom>
-            <div className="absolute left-0 top-6 w-[58%] rotate-[-3deg]" data-parallax="0.06">
+          {/* once.film-style hero: hand + phone cutouts, developed photos from Loewe */}
+          <div className="relative h-[480px] md:h-[560px] select-none" data-hero-zoom>
+            {/* hand holding the phone */}
+            <div className="absolute left-0 top-2 w-[52%] md:w-[42%] rotate-[-4deg]" data-parallax="0.07">
+              <img src={ONCE_HERO.hand} alt="Guest hand holding the camera phone" loading="lazy" className="w-full drop-shadow-2xl" />
+            </div>
+
+            {/* the phone */}
+            <div className="absolute right-0 top-6 w-[52%] md:w-[42%] rotate-[3deg]" data-parallax="-0.05">
+              <img src={ONCE_HERO.phone} alt="The shared camera phone" loading="lazy" className="w-full drop-shadow-2xl" />
+            </div>
+
+            {/* developed photo — Loewe campaign */}
+            <div className="absolute right-[2%] bottom-0 w-[46%] md:w-[38%] rotate-[2deg] z-10" data-parallax="0.11">
               <div className="bg-[#1C1C1E] border border-[#2C2C2E] p-2 pb-3 rounded-lg shadow-2xl">
-                <img src={PHOTOS.heroConfetti} alt="Confetti over a crowd" loading="lazy" className="w-full aspect-[4/5] object-cover rounded" />
-                <p className="mt-2 pl-1 text-[10px] uppercase tracking-widest text-neutral-500">Shot 07 · the toast</p>
+                <img src={LOEWE.campaign1} alt="Loewe campaign photograph" loading="lazy" className="w-full aspect-[3/4] object-cover rounded" />
+                <p className="mt-2 pl-1 text-[10px] uppercase tracking-widest text-neutral-500">Shot 07 · developed</p>
               </div>
             </div>
-            <div className="absolute right-0 top-0 w-[50%] rotate-[4deg] z-10" data-parallax="-0.04">
+
+            {/* developed photo — Loewe product */}
+            <div className="absolute left-[2%] bottom-6 w-[40%] md:w-[32%] rotate-[-6deg] z-20" data-parallax="0.14">
               <div className="bg-[#1C1C1E] border border-[#2C2C2E] p-2 pb-3 rounded-lg shadow-2xl">
-                <img src={PHOTOS.heroToast} alt="Wedding toast glasses" loading="lazy" className="w-full aspect-[4/5] object-cover rounded" />
-                <p className="mt-2 pl-1 text-[10px] uppercase tracking-widest text-neutral-500">Shot 02 · everyone’s eyes</p>
+                <img src={LOEWE.amazona} alt="Loewe product photograph" loading="lazy" className="w-full aspect-[3/4] object-cover rounded" />
+                <p className="mt-2 pl-1 text-[10px] uppercase tracking-widest text-neutral-500">Shot 19 · developed</p>
               </div>
             </div>
-            <div className="absolute left-[8%] bottom-0 w-[42%] rotate-[2deg] z-20" data-parallax="0.12">
-              <div className="bg-[#1C1C1E] border border-[#2C2C2E] p-2 pb-3 rounded-lg shadow-2xl">
-                <img src={PHOTOS.heroCrowd} alt="Concert crowd" loading="lazy" className="w-full aspect-[4/5] object-cover rounded" />
-                <p className="mt-2 pl-1 text-[10px] uppercase tracking-widest text-neutral-500">Shot 13 · the dance floor</p>
-              </div>
-            </div>
-            <div className="absolute right-[6%] bottom-[12%] w-[36%] rotate-[-5deg] z-30" data-parallax="0.02">
-              <div className="bg-[#1C1C1E] border border-[#2C2C2E] p-2 pb-3 rounded-lg shadow-2xl">
-                <img src={PHOTOS.heroRoad} alt="Open road trip" loading="lazy" className="w-full aspect-[4/5] object-cover rounded" />
-                <p className="mt-2 pl-1 text-[10px] uppercase tracking-widest text-neutral-500">Shot 19 · out the window</p>
-              </div>
-            </div>
+
             <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-40">
               <div className="bg-amber-500 text-black font-display text-xs font-bold px-4 py-2 rounded-full rotate-[-4deg] shadow-xl">
                 12 SHOTS LEFT
@@ -435,7 +438,7 @@ export default function Landing({ onCreateEvent }) {
       {/* ── FINAL CTA ───────────────────────────────────────────────────── */}
       <section className="relative py-28 md:py-40 overflow-hidden border-t border-[#1C1C1E]">
         <div className="absolute inset-0">
-          <img src={PHOTOS.heroConfetti} alt="" loading="lazy" className="w-full h-full object-cover opacity-20 blur-[2px]" />
+          <img src={LOEWE.campaign2} alt="" loading="lazy" className="w-full h-full object-cover opacity-20 blur-[2px]" />
           <div className="absolute inset-0 bg-gradient-to-b from-[#0A0A0A] via-[#0A0A0A]/70 to-[#0A0A0A]" />
         </div>
         <div className="relative max-w-3xl mx-auto px-6 text-center">
