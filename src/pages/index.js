@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import QRCode from 'qrcode';
 import { supabase } from '../lib/supabase';
 
 // Cloudflare R2 upload worker — signs presigned URLs for direct browser uploads.
@@ -21,6 +22,7 @@ export default function DispcamApp() {
   const [duration, setDuration] = useState('2');
   const [maxPhotos, setMaxPhotos] = useState('10');
   const [generatedLink, setGeneratedLink] = useState('');
+  const [qrDataUrl, setQrDataUrl] = useState('');
 
   // Guest & Real-time Lens States
   const [eventData, setEventData] = useState(null);
@@ -123,6 +125,7 @@ export default function DispcamApp() {
   const handleCreateEvent = async (e) => {
     e.preventDefault();
     if (!eventName) return;
+    setQrDataUrl('');
 
     const revealAt = new Date();
     revealAt.setHours(revealAt.getHours() + parseInt(duration));
@@ -144,6 +147,13 @@ export default function DispcamApp() {
 
       const roomUrl = `${window.location.origin}?room=${data.id}`;
       setGeneratedLink(roomUrl);
+
+      // Render a permanent QR code for this event (works forever, unlocks gallery after reveal)
+      QRCode.toDataURL(roomUrl, {
+        width: 512,
+        margin: 2,
+        color: { dark: '#0A0A0A', light: '#FFFFFF' }
+      }).then(setQrDataUrl).catch((err) => console.warn('QR generation failed:', err));
     } catch (error) {
       alert("Error creating event: " + error.message);
     }
@@ -246,6 +256,17 @@ export default function DispcamApp() {
     }
   };
 
+  const downloadQr = () => {
+    if (!qrDataUrl) return;
+    const safeName = eventName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'event';
+    const a = document.createElement('a');
+    a.href = qrDataUrl;
+    a.download = `dispcam-${safeName}-qr.png`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  };
+
   const handleEnterCamera = () => {
     if (!guestName) return;
     setView('camera');
@@ -317,12 +338,29 @@ export default function DispcamApp() {
               <div className="p-4 bg-[#1A1A1E] border border-[#2C2C2E] rounded-xl break-all text-sm font-mono text-amber-500 select-all">
                 {generatedLink}
               </div>
-              <button 
-                onClick={() => { navigator.clipboard.writeText(generatedLink); alert('Link copied!'); }}
-                className="w-full border border-[#2C2C2E] text-white hover:bg-[#1A1A1E] py-3 rounded-xl text-sm transition"
-              >
-                Copy Link
-              </button>
+              {qrDataUrl && (
+                <div className="space-y-3">
+                  <div className="inline-block p-3 bg-white rounded-2xl shadow-2xl">
+                    <img src={qrDataUrl} alt={`QR code for ${eventName}`} className="w-48 h-48 block" />
+                  </div>
+                  <p className="text-xs text-neutral-500">Scan anytime — this QR works forever.</p>
+                </div>
+              )}
+              <div className="grid grid-cols-2 gap-3">
+                <button 
+                  onClick={() => { navigator.clipboard.writeText(generatedLink); alert('Link copied!'); }}
+                  className="border border-[#2C2C2E] text-white hover:bg-[#1A1A1E] py-3 rounded-xl text-sm transition"
+                >
+                  Copy Link
+                </button>
+                <button 
+                  onClick={downloadQr}
+                  disabled={!qrDataUrl}
+                  className="border border-amber-500/40 text-amber-500 hover:bg-amber-500/10 py-3 rounded-xl text-sm transition disabled:opacity-40"
+                >
+                  Download QR
+                </button>
+              </div>
             </div>
           )}
         </div>
