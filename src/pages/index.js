@@ -30,10 +30,12 @@ export default function DispcamApp() {
   const [photoCount, setPhotoCount] = useState(0);
   const [uploading, setUploading] = useState(false);
   const [timeLeft, setTimeLeft] = useState('');
+  const [rollState, setRollState] = useState('active'); // 'active' | 'collapsing' | 'finished'
   
   // Hardware Camera Viewport Reference Layers
   const videoRef = useRef(null);
   const streamRef = useRef(null);
+  const rollTimerRef = useRef(null);
 
   // Unlocked Developed Gallery State
   const [photos, setPhotos] = useState([]);
@@ -59,6 +61,10 @@ export default function DispcamApp() {
       if (diff <= 0) {
         clearInterval(interval);
         stopCameraHardware();
+        if (rollTimerRef.current) {
+          clearTimeout(rollTimerRef.current);
+          rollTimerRef.current = null;
+        }
         loadDevelopedGallery(eventData.id);
       } else {
         const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
@@ -69,6 +75,11 @@ export default function DispcamApp() {
     }, 1000);
     return () => clearInterval(interval);
   }, [eventData, view]);
+
+  // Clear the 10s "out of films" timer when the camera unmounts
+  useEffect(() => () => {
+    if (rollTimerRef.current) clearTimeout(rollTimerRef.current);
+  }, []);
 
   // Direct Hardware Stream Activator
   const startCameraHardware = async () => {
@@ -215,6 +226,13 @@ export default function DispcamApp() {
       if (insertError) throw insertError;
 
       setPhotoCount(prev => prev + 1);
+
+      // Last shot taken — collapse the camera and show the "out of films" message for 10s
+      if (photoCount + 1 >= limitConstraint) {
+        stopCameraHardware();
+        setRollState('collapsing');
+        rollTimerRef.current = setTimeout(() => setRollState('finished'), 10000);
+      }
     } catch (err) {
       alert("Failed to capture photo: " + err.message + (err.code ? " (" + err.code + ")" : ""));
     }
@@ -269,10 +287,18 @@ export default function DispcamApp() {
 
   const handleEnterCamera = () => {
     if (!guestName) return;
+    if (rollTimerRef.current) {
+      clearTimeout(rollTimerRef.current);
+      rollTimerRef.current = null;
+    }
+    const alreadyDone = photoCount >= getActiveLimit();
+    setRollState(alreadyDone ? 'finished' : 'active');
     setView('camera');
-    setTimeout(() => {
-      startCameraHardware();
-    }, 100);
+    if (!alreadyDone) {
+      setTimeout(() => {
+        startCameraHardware();
+      }, 100);
+    }
   };
 
   const getActiveLimit = () => {
@@ -394,41 +420,67 @@ export default function DispcamApp() {
 
       {/* VIEW 3: LIVE HARDWARE CAMERA STREAM VIEWPORT */}
       {view === 'camera' && eventData && (
-        <div className="w-full max-w-md h-[92vh] flex flex-col justify-between items-center py-2 px-2">
-          <header className="text-center w-full">
-            <h1 className="text-xs uppercase tracking-widest text-neutral-500">{eventData.name}</h1>
-            <p className="text-lg font-mono font-light text-amber-500 mt-1">{timeLeft || 'Developing soon...'}</p>
-          </header>
+        <div className="relative w-full max-w-md h-[92vh] flex flex-col justify-between items-center py-2 px-2">
 
-          <div className="w-full aspect-[3/4] border border-[#1C1C1E] bg-black rounded-2xl relative overflow-hidden shadow-inner flex items-center justify-center">
-            <video 
-              ref={videoRef} autoPlay playsInline muted 
-              className="w-full h-full object-cover filter saturate-[1.05] contrast-[1.02]"
-            />
-            
-            <div className="absolute top-6 right-6 font-mono text-base tracking-wider text-amber-500 bg-black/80 border border-neutral-800 px-3 py-1 rounded-md backdrop-blur-md">
-              {photoCount} / {getActiveLimit()}
+          {/* LAYER A: ACTIVE CAMERA — collapses away when the roll ends */}
+          <div aria-hidden={rollState !== 'active'} className={`w-full h-full flex flex-col justify-between items-center transition-all duration-700 ease-in-out ${rollState !== 'active' ? 'opacity-0 scale-75 pointer-events-none' : ''}`}>
+            <header className="text-center w-full">
+              <h1 className="text-xs uppercase tracking-widest text-neutral-500">{eventData.name}</h1>
+              <p className="text-lg font-mono font-light text-amber-500 mt-1">{timeLeft || 'Developing soon...'}</p>
+            </header>
+
+            <div className="w-full aspect-[3/4] border border-[#1C1C1E] bg-black rounded-2xl relative overflow-hidden shadow-inner flex items-center justify-center">
+              <video 
+                ref={videoRef} autoPlay playsInline muted 
+                className="w-full h-full object-cover filter saturate-[1.05] contrast-[1.02]"
+              />
+              
+              <div className="absolute top-6 right-6 font-mono text-base tracking-wider text-amber-500 bg-black/80 border border-neutral-800 px-3 py-1 rounded-md backdrop-blur-md">
+                {photoCount} / {getActiveLimit()}
+              </div>
+
+              {uploading && (
+                <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center">
+                  <p className="text-xs tracking-widest text-amber-500 uppercase animate-pulse">Winding Film Roll...</p>
+                </div>
+              )}
             </div>
 
-            {uploading && (
-              <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center">
-                <p className="text-xs tracking-widest text-amber-500 uppercase animate-pulse">Winding Film Roll...</p>
-              </div>
-            )}
+            <footer className="w-full flex flex-col items-center space-y-4 pb-2">
+              <button 
+                onClick={handleShutterSnap}
+                disabled={uploading || photoCount >= getActiveLimit()}
+                className="w-22 h-22 rounded-full border-4 border-neutral-800 bg-[#F5F5F7] active:bg-neutral-500 disabled:bg-neutral-800 disabled:opacity-40 transition transform active:scale-95 flex items-center justify-center shadow-2xl"
+              >
+                <div className="w-16 h-16 rounded-full border-2 border-black bg-transparent"></div>
+              </button>
+              <p className="text-xs tracking-wider text-neutral-500 uppercase">
+                {photoCount >= getActiveLimit() ? "Roll Finished" : "Mechanical Shutter Release"}
+              </p>
+            </footer>
           </div>
 
-          <footer className="w-full flex flex-col items-center space-y-4 pb-2">
-            <button 
-              onClick={handleShutterSnap}
-              disabled={uploading || photoCount >= getActiveLimit()}
-              className="w-22 h-22 rounded-full border-4 border-neutral-800 bg-[#F5F5F7] active:bg-neutral-500 disabled:bg-neutral-800 disabled:opacity-40 transition transform active:scale-95 flex items-center justify-center shadow-2xl"
-            >
-              <div className="w-16 h-16 rounded-full border-2 border-black bg-transparent"></div>
-            </button>
-            <p className="text-xs tracking-wider text-neutral-500 uppercase">
-              {photoCount >= getActiveLimit() ? "Roll Finished" : "Mechanical Shutter Release"}
+          {/* LAYER B: 10-SECOND "OUT OF FILMS" MESSAGE */}
+          <div aria-hidden={rollState !== 'collapsing'} className={`absolute inset-0 flex items-center justify-center transition-all duration-700 ease-in-out ${rollState === 'collapsing' ? 'opacity-100 scale-100' : 'opacity-0 scale-95 pointer-events-none'}`}>
+            <div className="text-center space-y-6 px-6">
+              <div className="mx-auto w-20 h-20 rounded-full border border-amber-500/40 flex items-center justify-center">
+                <div className="w-4 h-4 bg-amber-500 rounded-full animate-pulse"></div>
+              </div>
+              <p className="text-amber-500/90 text-xl font-light italic tracking-wide leading-relaxed max-w-xs mx-auto">
+                "idk about your luck but you're definitely out of films"
+              </p>
+            </div>
+          </div>
+
+          {/* LAYER C: ROLL FINISHED — WAITING FOR DEVELOPMENT */}
+          <div aria-hidden={rollState !== 'finished'} className={`absolute inset-0 flex flex-col items-center justify-center text-center space-y-5 px-6 transition-all duration-700 ease-in-out ${rollState === 'finished' ? 'opacity-100 scale-100' : 'opacity-0 scale-95 pointer-events-none'}`}>
+            <p className="text-xs uppercase tracking-widest text-neutral-500">{eventData.name}</p>
+            <h2 className="text-2xl font-light text-white tracking-tight">Roll finished — developing…</h2>
+            <p className="font-mono text-3xl text-amber-500">{timeLeft || 'Developing soon...'}</p>
+            <p className="text-xs text-neutral-500 max-w-xs leading-relaxed">
+              Your exposures are processing. The gallery unlocks automatically when the timer ends.
             </p>
-          </footer>
+          </div>
         </div>
       )}
 
