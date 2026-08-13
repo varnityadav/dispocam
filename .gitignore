@@ -3,6 +3,7 @@ node_modules/
 
 # Build output
 .next/
+out/
 
 # Environment
 .env.local
@@ -18,3 +19,7 @@ Thumbs.db
 
 # Firebase (rule files are tracked, but not local state)
 .firebase/
+
+# Cloudflare Wrangler local state
+.wrangler/
+workers/.wrangler/

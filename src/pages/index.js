@@ -1,21 +1,15 @@
 import { useState, useEffect, useRef } from 'react';
-import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getFirestore, collection, addDoc, doc, getDoc, getDocs, query, where } from 'firebase/firestore';
-import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { supabase } from '../lib/supabase';
 
-// Inline programmatic initialization of Firebase SDK matching Vercel configurations
-const firebaseConfig = {
-  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
-  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
-  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
-  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID
-};
+// Cloudflare R2 upload worker — signs presigned URLs for direct browser uploads.
+// Set via NEXT_PUBLIC_R2_WORKER_URL in .env.local (deploy from /workers).
+const R2_WORKER_URL = process.env.NEXT_PUBLIC_R2_WORKER_URL;
 
-const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
-const db = getFirestore(app);
-const storage = getStorage(app);
+// Optional: public custom domain bound to the R2 bucket (e.g. https://media.example.com).
+// When set, gallery images load from plain public URLs instead of signed URLs.
+const MEDIA_BASE_URL = process.env.NEXT_PUBLIC_MEDIA_BASE_URL || '';
+
+const NOT_CONFIGURED = 'Missing Supabase or R2 configuration. Check your .env.local and build.';
 
 export default function DispcamApp() {
   // Navigation & Session States
@@ -98,19 +92,26 @@ export default function DispcamApp() {
 
   const evaluateRoomRoute = async (idToTrack) => {
     try {
-      const docRef = doc(db, 'events', idToTrack);
-      const docSnap = await getDoc(docRef);
-      
-      if (!docSnap.exists()) {
+      if (!supabase) throw new Error(NOT_CONFIGURED);
+
+      const { data, error } = await supabase
+        .from('events')
+        .select('*')
+        .eq('id', idToTrack)
+        .maybeSingle();
+
+      if (error) throw error;
+
+      if (!data) {
         alert("Event not found. Check that the link is correct.");
         return;
       }
       
-      const data = { id: docSnap.id, ...docSnap.data() };
-      setEventData(data);
+      const eventData = { id: data.id, ...data };
+      setEventData(eventData);
       
-      if (new Date() > new Date(data.reveal_at)) {
-        loadDevelopedGallery(data.id);
+      if (new Date() > new Date(eventData.reveal_at)) {
+        loadDevelopedGallery(eventData.id);
       } else {
         setView('join');
       }
@@ -127,14 +128,21 @@ export default function DispcamApp() {
     revealAt.setHours(revealAt.getHours() + parseInt(duration));
 
     try {
-      const docRef = await addDoc(collection(db, 'events'), {
-        name: eventName,
-        reveal_at: revealAt.toISOString(),
-        max_photos_limit: parseInt(maxPhotos),
-        created_at: new Date().toISOString()
-      });
+      if (!supabase) throw new Error(NOT_CONFIGURED);
 
-      const roomUrl = `${window.location.origin}?room=${docRef.id}`;
+      const { data, error } = await supabase
+        .from('events')
+        .insert({
+          name: eventName,
+          reveal_at: revealAt.toISOString(),
+          max_photos_limit: parseInt(maxPhotos)
+        })
+        .select('id')
+        .single();
+
+      if (error) throw error;
+
+      const roomUrl = `${window.location.origin}?room=${data.id}`;
       setGeneratedLink(roomUrl);
     } catch (error) {
       alert("Error creating event: " + error.message);
@@ -171,17 +179,30 @@ export default function DispcamApp() {
       const fileId = `${Date.now()}-${Math.random().toString(36).substring(7)}`;
       const storagePath = `once-films/${eventData.id}/${fileId}.jpg`;
       
-      // Upload raw file bytes stream to Firebase Cloud Storage storage system bucket
-      const storageRef = ref(storage, storagePath);
-      await uploadBytes(storageRef, blob);
+      // Ask the Worker for a presigned URL, then upload the photo straight to R2
+      if (!R2_WORKER_URL) throw new Error(NOT_CONFIGURED);
+      const signedRes = await fetch(`${R2_WORKER_URL}/upload-url`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: storagePath, contentType: 'image/jpeg' })
+      });
+      const signedJson = await signedRes.json();
+      if (!signedJson.url) throw new Error(signedJson.error || 'Failed to get upload URL');
 
-      // Save structural transaction document index log inside Firestore collection map metadata storage
-      await addDoc(collection(db, 'photos'), {
+      await fetch(signedJson.url, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'image/jpeg' },
+        body: blob
+      });
+
+      // Log the shot in the photos table so it can be found at reveal time
+      if (!supabase) throw new Error(NOT_CONFIGURED);
+      const { error: insertError } = await supabase.from('photos').insert({
         event_id: eventData.id,
         guest_name: guestName,
-        storage_path: storagePath,
-        created_at: new Date().toISOString()
+        storage_path: storagePath
       });
+      if (insertError) throw insertError;
 
       setPhotoCount(prev => prev + 1);
     } catch (err) {
@@ -192,22 +213,30 @@ export default function DispcamApp() {
 
   const loadDevelopedGallery = async (idToFetch) => {
     try {
-      const q = query(
-        collection(db, 'photos'), 
-        where('event_id', '==', idToFetch)
-      );
-      const querySnapshot = await getDocs(q);
-      
+      if (!supabase) throw new Error(NOT_CONFIGURED);
+
+      const { data: rows, error } = await supabase
+        .from('photos')
+        .select('*')
+        .eq('event_id', idToFetch);
+      if (error) throw error;
+
       const photosList = [];
-      for (const docSnap of querySnapshot.docs) {
-        const data = docSnap.data();
-        // Generate secure downloadable display public URL pointers from Storage pointers
-        const fileRef = ref(storage, data.storage_path);
-        const downloadUrl = await getDownloadURL(fileRef);
-        photosList.push({ id: docSnap.id, downloadUrl, ...data });
+      for (const row of rows) {
+        // Public custom domain if configured, otherwise a signed URL from the Worker
+        let downloadUrl;
+        if (MEDIA_BASE_URL) {
+          downloadUrl = `${MEDIA_BASE_URL}/${row.storage_path}`;
+        } else {
+          if (!R2_WORKER_URL) throw new Error(NOT_CONFIGURED);
+          const signedRes = await fetch(`${R2_WORKER_URL}/download-url?path=${encodeURIComponent(row.storage_path)}`);
+          const signedJson = await signedRes.json();
+          downloadUrl = signedJson.url;
+        }
+        photosList.push({ id: row.id, downloadUrl, ...row });
       }
       
-      // Sort photos newest-first client-side (avoids needing a composite Firestore index)
+      // Sort photos newest-first client-side
       photosList.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
       
       setPhotos(photosList);
