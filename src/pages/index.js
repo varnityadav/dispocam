@@ -373,7 +373,7 @@ export default function DispcamApp() {
     const safeName = eventName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'event';
     const a = document.createElement('a');
     a.href = qrDataUrl;
-    a.download = `dispcam-${safeName}-qr.png`;
+    a.download = `dispocam-${safeName}-qr.png`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -488,7 +488,7 @@ export default function DispcamApp() {
       {/* VIEW 1: HOST ENTRY DASHBOARD */}
       {view === 'host' && (
         <div className="w-full max-w-md border border-[#1C1C1E] bg-[#121214] rounded-3xl p-8 shadow-2xl">
-          <h1 className="text-3xl font-light tracking-tight text-center mb-1 text-white">Dispcam.</h1>
+          <h1 className="text-3xl font-light tracking-tight text-center mb-1 text-white">DispoCam.</h1>
           <p className="text-xs text-neutral-500 text-center mb-8 uppercase tracking-widest">No Previews. No Retakes.</p>
 
           {!generatedLink ? (

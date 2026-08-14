@@ -47,12 +47,12 @@ const STEPS = [
 ];
 
 const FAQS = [
-  { q: 'How does Dispcam work?', a: 'You create an event and get a link plus a permanent QR code. Guests open it, add their name, and shoot into a shared film roll with a fixed number of shots. When the reveal timer ends, the gallery develops for everyone.' },
+  { q: 'How does DispoCam work?', a: 'You create an event and get a link plus a permanent QR code. Guests open it, add their name, and shoot into a shared film roll with a fixed number of shots. When the reveal timer ends, the gallery develops for everyone.' },
   { q: 'Do guests need to install anything?', a: 'No. Everything runs in the browser — scan the QR or tap the link and they’re in. No app stores, no accounts, no downloads.' },
   { q: 'When do the photos reveal?', a: 'You set a timer when creating the event. Until it runs out, every shot stays sealed — no previews for anyone, not even you.' },
   { q: 'Can guests see their photos before reveal?', a: 'No previews, no retakes. A shot is committed the instant the shutter fires. That’s what makes it feel like real film.' },
   { q: 'Who can see the photos afterwards?', a: 'Anyone with the event link. After the reveal, the developed gallery opens, and you can share it anywhere.' },
-  { q: 'Why is it called Dispcam?', a: 'A disposable camera, reborn. Life happens once — don’t let it fade away.' },
+  { q: 'Why is it called DispoCam?', a: 'A disposable camera, reborn. Life happens once — don’t let it fade away.' },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -89,7 +89,7 @@ function DslrSvg() {
       <line x1="124" y1="46" x2="124" y2="84" stroke="#3a3a42" strokeWidth="2" strokeLinecap="round" />
       {/* status led */}
       <circle cx="26" cy="46" r="2.5" fill="#f59e0b" />
-      <text x="33" y="92" fill="#4a4a52" fontSize="8" letterSpacing="1.5" fontFamily="ui-monospace, monospace">DISP*CAM</text>
+      <text x="33" y="92" fill="#4a4a52" fontSize="8" letterSpacing="1.5" fontFamily="ui-monospace, monospace">DISPO*CAM</text>
     </svg>
   );
 }
@@ -292,9 +292,8 @@ export default function Landing({ onCreateEvent }) {
 
       {/* ── NAV ─────────────────────────────────────────────────────────── */}
       <nav className={`fixed top-0 inset-x-0 z-50 transition-all duration-500 ${scrolled ? 'bg-[#0A0A0A]/85 backdrop-blur-md border-b border-[#1C1C1E]' : 'bg-transparent'}`}>
-        <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
-          <button onClick={handleCreate} className="font-display text-lg tracking-tight text-white">
-            Disp<span className="text-amber-500">cam</span>.
+        <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">            <button onClick={handleCreate} className="font-display text-lg tracking-tight text-white">
+            Dispo<span className="text-amber-500">Cam</span>.
           </button>
 
           <div className="hidden md:flex items-center gap-8">
@@ -350,7 +349,7 @@ export default function Landing({ onCreateEvent }) {
               <span className="font-serif-accent text-amber-400/90">everyone’s eyes.</span>
             </h1>
             <p data-reveal-rise data-delay="220" className="mt-7 text-base md:text-lg text-neutral-400 leading-relaxed max-w-md">
-              Dispcam turns your event into a disposable camera every guest can shoot.
+              DispoCam turns your event into a disposable camera every guest can shoot.
               Scan the QR — no app, no signup — snap a limited roll of shots, and the
               film develops for everyone at reveal time.
             </p>
@@ -593,15 +592,15 @@ export default function Landing({ onCreateEvent }) {
               <p className="block text-sm text-neutral-600 py-1">Terms</p>
             </div>
             <div className="col-span-2 md:col-span-1">
-              <p className="text-[11px] uppercase tracking-[0.25em] text-neutral-600 mb-4">Dispcam</p>
+              <p className="text-[11px] uppercase tracking-[0.25em] text-neutral-600 mb-4">DispoCam</p>
               <p className="text-sm text-neutral-500 leading-relaxed">No Previews. No Retakes. One roll per event, developed in time.</p>
             </div>
           </div>
           <div className="mt-14 pt-6 border-t border-[#1C1C1E] flex flex-col md:flex-row items-center justify-between gap-4">
             <button onClick={handleCreate} className="font-display text-base tracking-tight text-white">
-              Disp<span className="text-amber-500">cam</span>.
+              Dispo<span className="text-amber-500">Cam</span>.
             </button>
-            <p className="text-xs text-neutral-600">© 2026 Dispcam — No Previews. No Retakes.</p>
+            <p className="text-xs text-neutral-600">© 2026 DispoCam — No Previews. No Retakes.</p>
           </div>
         </div>
       </footer>
