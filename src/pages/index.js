@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, Fragment } from 'react';
 import QRCode from 'qrcode';
 import { supabase } from '../lib/supabase';
 import Landing from '../components/Landing';
@@ -12,6 +12,73 @@ const R2_WORKER_URL = process.env.NEXT_PUBLIC_R2_WORKER_URL;
 const MEDIA_BASE_URL = process.env.NEXT_PUBLIC_MEDIA_BASE_URL || '';
 
 const NOT_CONFIGURED = 'Missing Supabase or R2 configuration. Check your .env.local and build.';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Mechanical split-flap countdown — one digit tumbles at a time, like a
+// real departure-board flip clock.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function FlipDigit({ value }) {
+  const v = String(value % 10);
+  const [top, setTop] = useState(v);
+  const [bottom, setBottom] = useState(v);
+  const [flipping, setFlipping] = useState(false);
+  const prevRef = useRef(v);
+
+  useEffect(() => {
+    if (v !== prevRef.current) {
+      setTop(v); // new digit's top shows at once — the folding flap covers it briefly
+      setFlipping(true);
+      const t = setTimeout(() => {
+        setBottom(v);
+        prevRef.current = v;
+        setFlipping(false);
+      }, 360);
+      return () => clearTimeout(t);
+    }
+  }, [v]);
+
+  return (
+    <div className="flip-digit">
+      <div className="flip-half top"><span className="flip-digit-value">{top}</span></div>
+      <div className="flip-half bottom"><span className="flip-digit-value">{bottom}</span></div>
+      <div className="flip-seam" />
+      {flipping && (
+        <>
+          <div className="flip-half flip-flap-top"><span className="flip-digit-value">{prevRef.current}</span></div>
+          <div className="flip-half flip-flap-bottom"><span className="flip-digit-value">{v}</span></div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function FlipClock({ seconds, size = 'md' }) {
+  const s = Math.max(0, Math.floor(seconds || 0));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  const dims =
+    size === 'sm'
+      ? { '--dw': '26px', '--dh': '34px', '--dfs': '20px' }
+      : size === 'lg'
+      ? { '--dw': '46px', '--dh': '60px', '--dfs': '36px' }
+      : { '--dw': '30px', '--dh': '40px', '--dfs': '24px' };
+  const units = h > 0 ? [h, m, sec] : [m, sec];
+  return (
+    <div className="flip-clock" style={dims}>
+      {units.map((u, i) => (
+        <Fragment key={i}>
+          {i > 0 && <span className="flip-sep">:</span>}
+          <div className="flex gap-1">
+            <FlipDigit value={Math.floor(u / 10)} />
+            <FlipDigit value={u % 10} />
+          </div>
+        </Fragment>
+      ))}
+    </div>
+  );
+}
 
 export default function DispcamApp() {
   // Navigation & Session States — 'landing' is the new home page; ?room= deep links are routed by the effect below
@@ -30,7 +97,7 @@ export default function DispcamApp() {
   const [guestName, setGuestName] = useState('');
   const [photoCount, setPhotoCount] = useState(0);
   const [uploading, setUploading] = useState(false);
-  const [timeLeft, setTimeLeft] = useState('');
+  const [timeLeft, setTimeLeft] = useState(0);
   const [rollState, setRollState] = useState('active'); // 'active' | 'collapsing' | 'finished'
   
   // Hardware Camera Viewport Reference Layers
@@ -51,10 +118,35 @@ export default function DispcamApp() {
     }
   }, []);
 
-  // Time-lock countdown loop
+  // Make the browser Back button work: each view pushes its own history state,
+  // so Back restores the previous view instead of dumping the app to a blank page.
+  useEffect(() => {
+    const onPop = () => {
+      window.scrollTo(0, 0);
+      const st = window.history.state;
+      if (st && st.dispcam && st.view) {
+        if (st.view === 'join' && eventData && new Date() > new Date(eventData.reveal_at)) {
+          // Event already developed — don't restore a dead join screen
+          loadDevelopedGallery(eventData.id);
+        } else {
+          setView(st.view);
+          if (st.view === 'camera') {
+            setRollState(photoCount >= getActiveLimit() ? 'finished' : 'active');
+            setTimeout(() => startCameraHardware(), 120);
+          }
+        }
+      } else {
+        setView('landing');
+      }
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, [photoCount, eventData]);
+
+  // Time-lock countdown loop (ticks immediately, then every second)
   useEffect(() => {
     if (!eventData || view !== 'camera') return;
-    const interval = setInterval(() => {
+    const tick = () => {
       const now = new Date().getTime();
       const target = new Date(eventData.reveal_at).getTime();
       const diff = target - now;
@@ -68,12 +160,11 @@ export default function DispcamApp() {
         }
         loadDevelopedGallery(eventData.id);
       } else {
-        const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-        const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-        const seconds = Math.floor((diff % (1000 * 60)) / 1000);
-        setTimeLeft(`${hours}h ${minutes}m ${seconds}s`);
+        setTimeLeft(Math.floor(diff / 1000));
       }
-    }, 1000);
+    };
+    tick();
+    const interval = setInterval(tick, 1000);
     return () => clearInterval(interval);
   }, [eventData, view]);
 
@@ -128,6 +219,7 @@ export default function DispcamApp() {
         loadDevelopedGallery(eventData.id);
       } else {
         setView('join');
+        window.history.replaceState({ dispcam: true, view: 'join' }, '');
       }
     } catch (e) {
       alert("Error loading event: " + e.message);
@@ -270,6 +362,7 @@ export default function DispcamApp() {
       
       setPhotos(photosList);
       setView('gallery');
+      window.history.replaceState({ dispcam: true, view: 'gallery' }, '');
     } catch (e) {
       alert("Failed to load gallery: " + e.message);
     }
@@ -295,6 +388,7 @@ export default function DispcamApp() {
     const alreadyDone = photoCount >= getActiveLimit();
     setRollState(alreadyDone ? 'finished' : 'active');
     setView('camera');
+    window.history.pushState({ dispcam: true, view: 'camera' }, '');
     if (!alreadyDone) {
       setTimeout(() => {
         startCameraHardware();
@@ -313,6 +407,12 @@ export default function DispcamApp() {
   const handleEnterApp = () => {
     if (typeof window !== 'undefined') window.scrollTo(0, 0);
     setView('host');
+    if (typeof window !== 'undefined') {
+      const st = window.history.state;
+      if (!(st && st.dispcam && st.view === 'host')) {
+        window.history.pushState({ dispcam: true, view: 'host' }, '');
+      }
+    }
   };
 
   return (
@@ -324,7 +424,66 @@ export default function DispcamApp() {
 
       {/* APP VIEWS */}
       {view !== 'landing' && (
-      <div className="min-h-screen bg-[#0A0A0A] text-[#F5F5F7] flex flex-col justify-center items-center p-4 font-sans antialiased">
+      <div className="min-h-screen bg-[#0A0A0A] text-[#F5F5F7] flex flex-col justify-center items-center p-4 antialiased" style={{ fontFamily: "'Manrope', ui-sans-serif, system-ui, sans-serif" }}>
+        <style>{`
+          .flip-clock { display: inline-flex; align-items: center; gap: 6px; }
+          .flip-sep { color: #b45309; font-size: calc(var(--dfs, 24px) * 0.75); line-height: var(--dh, 40px); font-family: ui-monospace, 'SF Mono', Menlo, monospace; }
+          .flip-digit {
+            position: relative; width: var(--dw, 30px); height: var(--dh, 40px); border-radius: 7px;
+            transform-style: preserve-3d;
+            box-shadow: 0 6px 14px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+          }
+          .flip-half { position: absolute; left: 0; width: 100%; height: 50%; overflow: hidden; background: linear-gradient(to bottom, #18181c, #101013); }
+          .flip-half.top { top: 0; border-radius: 7px 7px 0 0; }
+          .flip-half.bottom { bottom: 0; border-radius: 0 0 7px 7px; }
+          .flip-digit-value {
+            position: absolute; left: 0; top: 0; width: 100%; height: var(--dh, 40px); line-height: var(--dh, 40px);
+            text-align: center; font-size: var(--dfs, 24px); font-weight: 500; letter-spacing: 1px;
+            font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+            color: #fbbf24;
+          }
+          .flip-half.bottom .flip-digit-value { top: calc(var(--dh, 40px) / -2); }
+          .flip-seam { position: absolute; left: 0; top: 50%; width: 100%; height: 1px; background: #000; z-index: 5; box-shadow: 0 1px 0 rgba(255, 255, 255, 0.05); }
+          .flip-flap-top { top: 0; z-index: 4; transform-origin: 50% 100%; animation: flipFold 0.16s ease-in forwards; backface-visibility: hidden; -webkit-backface-visibility: hidden; }
+          .flip-flap-bottom { bottom: 0; z-index: 3; transform-origin: 50% 0%; transform: rotateX(90deg); animation: flipUnfold 0.18s ease-out 0.16s forwards; backface-visibility: hidden; -webkit-backface-visibility: hidden; }
+          @keyframes flipFold { from { transform: rotateX(0deg); } to { transform: rotateX(-90deg); } }
+          @keyframes flipUnfold { from { transform: rotateX(90deg); } to { transform: rotateX(0deg); } }
+
+          /* Black shutter release — protruding from the screen */
+          .shutter-3d {
+            position: relative; width: 82px; height: 82px; border-radius: 9999px; cursor: pointer;
+            background: radial-gradient(130% 130% at 28% 16%, #4a4a52 0%, #1c1c22 42%, #050506 100%);
+            box-shadow:
+              0 22px 44px rgba(0, 0, 0, 0.9),
+              0 10px 20px rgba(0, 0, 0, 0.65),
+              0 3px 6px rgba(0, 0, 0, 0.5),
+              inset 0 -12px 20px rgba(0, 0, 0, 0.85),
+              inset 0 12px 20px rgba(255, 255, 255, 0.06);
+          }
+          .shutter-3d::before {
+            content: ''; position: absolute; inset: 9px; border-radius: 9999px;
+            background: radial-gradient(100% 100% at 50% 0%, #0d0d10, #000);
+            border: 1px solid #232329;
+            box-shadow: inset 0 4px 10px rgba(0, 0, 0, 0.95), inset 0 -1px 3px rgba(255, 255, 255, 0.05);
+          }
+          .shutter-3d::after {
+            content: ''; position: absolute; left: 50%; top: 50%; width: 30px; height: 30px; border-radius: 9999px;
+            transform: translate(-50%, -50%);
+            background: radial-gradient(circle at 35% 30%, #17171b, #000 70%);
+            border: 1px solid #26262d;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.9), inset 0 1px 2px rgba(255, 255, 255, 0.05);
+          }
+          .shutter-3d .lip {
+            position: absolute; inset: 0; border-radius: 9999px; pointer-events: none;
+            background:
+              radial-gradient(60% 60% at 18% 14%, rgba(255, 255, 255, 0.16), transparent 70%),
+              radial-gradient(50% 50% at 84% 88%, rgba(0, 0, 0, 0.9), transparent 70%);
+          }
+          .shutter-3d:hover::before { background: radial-gradient(100% 100% at 50% 0%, #141419, #000); }
+          @media (prefers-reduced-motion: reduce) {
+            .flip-flap-top, .flip-flap-bottom { animation: none; }
+          }
+        `}</style>
       
       {/* VIEW 1: HOST ENTRY DASHBOARD */}
       {view === 'host' && (
@@ -440,7 +599,9 @@ export default function DispcamApp() {
           <div aria-hidden={rollState !== 'active'} className={`w-full h-full flex flex-col justify-between items-center transition-all duration-700 ease-in-out ${rollState !== 'active' ? 'opacity-0 scale-75 pointer-events-none' : ''}`}>
             <header className="text-center w-full">
               <h1 className="text-xs uppercase tracking-widest text-neutral-500">{eventData.name}</h1>
-              <p className="text-lg font-mono font-light text-amber-500 mt-1">{timeLeft || 'Developing soon...'}</p>
+              <div className="mt-1.5 flex justify-center">
+                <FlipClock seconds={timeLeft} size="sm" />
+              </div>
             </header>
 
             <div className="w-full aspect-[3/4] border border-[#1C1C1E] bg-black rounded-2xl relative overflow-hidden shadow-inner flex items-center justify-center">
@@ -461,12 +622,13 @@ export default function DispcamApp() {
             </div>
 
             <footer className="w-full flex flex-col items-center space-y-4 pb-2">
-              <button 
+              <button
                 onClick={handleShutterSnap}
                 disabled={uploading || photoCount >= getActiveLimit()}
-                className="w-22 h-22 rounded-full border-4 border-neutral-800 bg-[#F5F5F7] active:bg-neutral-500 disabled:bg-neutral-800 disabled:opacity-40 transition transform active:scale-95 flex items-center justify-center shadow-2xl"
+                aria-label="Take photo"
+                className="shutter-3d disabled:opacity-40 disabled:cursor-not-allowed transition-transform duration-200 active:scale-95"
               >
-                <div className="w-16 h-16 rounded-full border-2 border-black bg-transparent"></div>
+                <span className="lip" />
               </button>
               <p className="text-xs tracking-wider text-neutral-500 uppercase">
                 {photoCount >= getActiveLimit() ? "Roll Finished" : "Mechanical Shutter Release"}
@@ -490,7 +652,7 @@ export default function DispcamApp() {
           <div aria-hidden={rollState !== 'finished'} className={`absolute inset-0 flex flex-col items-center justify-center text-center space-y-5 px-6 transition-all duration-700 ease-in-out ${rollState === 'finished' ? 'opacity-100 scale-100' : 'opacity-0 scale-95 pointer-events-none'}`}>
             <p className="text-xs uppercase tracking-widest text-neutral-500">{eventData.name}</p>
             <h2 className="text-2xl font-light text-white tracking-tight">Roll finished — developing…</h2>
-            <p className="font-mono text-3xl text-amber-500">{timeLeft || 'Developing soon...'}</p>
+            <FlipClock seconds={timeLeft} size="lg" />
             <p className="text-xs text-neutral-500 max-w-xs leading-relaxed">
               Your exposures are processing. The gallery unlocks automatically when the timer ends.
             </p>

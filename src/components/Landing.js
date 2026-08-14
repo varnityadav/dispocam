@@ -20,6 +20,12 @@ const ONCE_HERO = {
   phone: 'https://framerusercontent.com/images/xuNve9xG0Hr2fNU3RQQanJvL0bg.png',
 };
 
+// Ambient party-lights backdrop — no people, just the bokeh vibes. Swap anytime.
+const PARTY_BG = 'https://images.unsplash.com/photo-1492684223066-81342ee5ff30?w=1920&q=70';
+
+// Sample frames spooling through the marquee film reel
+const REEL_FRAMES = [LOEWE.campaign1, LOEWE.amazona, LOEWE.campaign2, LOEWE.rtw];
+
 const NAV_LINKS = [
   { label: 'How it works', href: '#how-it-works' },
   { label: 'Use cases',    href: '#use-cases' },
@@ -49,7 +55,85 @@ const FAQS = [
   { q: 'Why is it called Dispcam?', a: 'A disposable camera, reborn. Life happens once — don’t let it fade away.' },
 ];
 
-const MARQUEE_ITEMS = ['NO PREVIEWS', 'NO RETAKES', 'SHARED FILM ROLL', 'ONE DAY — ONE ROLL', 'DEVELOPED IN TIME'];
+// ─────────────────────────────────────────────────────────────────────────────
+// Marquee scene: a DSLR that flashes every 3s, then a hand holding a phone
+// with a film reel of sample photos spooling out of it.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function DslrSvg() {
+  return (
+    <svg width="150" height="112" viewBox="0 0 150 112" fill="none" xmlns="http://www.w3.org/2000/svg" className="drop-shadow-2xl">
+      <defs>
+        <linearGradient id="dslrBody" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#2c2c33" />
+          <stop offset="100%" stopColor="#0b0b0d" />
+        </linearGradient>
+        <linearGradient id="dslrLens" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#3d3d45" />
+          <stop offset="100%" stopColor="#101013" />
+        </linearGradient>
+      </defs>
+      {/* pentaprism hump */}
+      <path d="M48 34 V24 Q48 17 55 17 H95 Q102 17 102 24 V34 Z" fill="url(#dslrBody)" stroke="#4a4a52" strokeWidth="1.5" />
+      {/* body */}
+      <rect x="14" y="32" width="122" height="66" rx="12" fill="url(#dslrBody)" stroke="#4a4a52" strokeWidth="1.5" />
+      {/* flash bulb */}
+      <rect x="104" y="12" width="20" height="20" rx="5" fill="#1a1a1e" stroke="#4a4a52" strokeWidth="1.5" />
+      {/* lens mount + rings */}
+      <circle cx="62" cy="65" r="30" fill="url(#dslrLens)" stroke="#56565e" strokeWidth="2" />
+      <circle cx="62" cy="65" r="23" fill="#0a0a0c" stroke="#3a3a42" strokeWidth="1.5" />
+      <circle cx="62" cy="65" r="14" fill="#121216" stroke="#56565e" strokeWidth="1.5" />
+      <circle cx="62" cy="65" r="5" fill="#1e1e24" />
+      {/* grip texture */}
+      <line x1="120" y1="46" x2="120" y2="84" stroke="#3a3a42" strokeWidth="2" strokeLinecap="round" />
+      <line x1="124" y1="46" x2="124" y2="84" stroke="#3a3a42" strokeWidth="2" strokeLinecap="round" />
+      {/* status led */}
+      <circle cx="26" cy="46" r="2.5" fill="#f59e0b" />
+      <text x="33" y="92" fill="#4a4a52" fontSize="8" letterSpacing="1.5" fontFamily="ui-monospace, monospace">DISP*CAM</text>
+    </svg>
+  );
+}
+
+function MarqueeScene() {
+  return (
+    <div className="flex items-center gap-10 md:gap-14 px-8 md:px-12">
+      {/* DSLR — flashes a little every 3 seconds */}
+      <div className="relative flex items-center">
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
+          <div className="dslr-flash w-40 h-40 rounded-full" />
+        </div>
+        <div className="dslr-kick">
+          <DslrSvg />
+        </div>
+      </div>
+
+      {/* hand holding the phone, with a film reel rising out of it */}
+      <div className="relative w-[200px] h-[150px]">
+        <div className="absolute left-1/2 -translate-x-1/2 -top-9 w-[62px] h-[196px] z-10">
+          <div className="absolute left-0 top-0 bottom-0 w-[9px] sprockets-v" />
+          <div className="absolute right-0 top-0 bottom-0 w-[9px] sprockets-v" />
+          <div className="absolute left-[9px] right-[9px] top-0 bottom-0 overflow-hidden bg-[#141416] rounded-[3px] border border-[#26262b]">
+            <div className="film-reel-run">
+              {[0, 1].map((dup) => (
+                <div key={dup} className="flex flex-col shrink-0">
+                  {REEL_FRAMES.map((src, i) => (
+                    <div key={i} className="shrink-0 m-[6px] rounded-[2px] overflow-hidden bg-black">
+                      <img src={src} alt="" loading="lazy" className="w-full aspect-[3/4] object-cover" />
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+        <img src={ONCE_HERO.hand} alt="" loading="lazy" className="absolute left-0 bottom-0 w-[128px] rotate-[-5deg] z-20 drop-shadow-2xl" />
+        <img src={ONCE_HERO.phone} alt="" loading="lazy" className="absolute right-1 bottom-0 w-[112px] rotate-[4deg] z-30 drop-shadow-2xl" />
+      </div>
+
+      <span className="text-amber-500 text-2xl drop-shadow-[0_0_12px_rgba(245,158,11,0.6)]">✦</span>
+    </div>
+  );
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -131,15 +215,47 @@ export default function Landing({ onCreateEvent }) {
   };
 
   return (
-    <div className="relative min-h-screen bg-[#0A0A0A] text-[#F5F5F7] font-body antialiased overflow-x-hidden">
+    <div className="relative min-h-screen text-[#F5F5F7] font-body antialiased overflow-x-hidden">
+      {/* Fixed ambient party-lights backdrop — no people, just bokeh vibes */}
+      <div className="fixed inset-0 -z-10 bg-[#0A0A0A]">
+        <img src={PARTY_BG} alt="" aria-hidden="true" className="w-full h-full object-cover opacity-60 blur-[5px] scale-105" />
+        <div className="absolute inset-0 bg-[#0A0A0A]/70" />
+        <div className="absolute inset-0 bg-gradient-to-b from-[#0A0A0A]/70 via-[#0A0A0A]/20 to-[#0A0A0A]/90" />
+      </div>
       <style>{`
-        body { font-family: 'Inter', ui-sans-serif, system-ui, sans-serif; }
-        .font-display { font-family: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif; }
-        .font-serif-accent { font-family: 'Instrument Serif', Georgia, serif; font-style: italic; }
+        body { font-family: 'Manrope', ui-sans-serif, system-ui, sans-serif; background-color: #0A0A0A; }
+        .font-display { font-family: 'Fraunces', Georgia, serif; font-optical-sizing: auto; }
+        .font-serif-accent { font-family: 'Fraunces', Georgia, serif; font-style: italic; font-optical-sizing: auto; }
         html { scroll-behavior: smooth; }
 
         .marquee-track { display: flex; width: max-content; animation: marquee 32s linear infinite; }
         @keyframes marquee { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+
+        /* DSLR flash — one quick pop every 3 seconds */
+        .dslr-flash {
+          background: radial-gradient(circle, rgba(255, 244, 214, 0.95) 0%, rgba(255, 232, 170, 0.45) 34%, transparent 70%);
+          opacity: 0;
+          animation: cameraFlash 3s ease-out infinite;
+        }
+        @keyframes cameraFlash {
+          0%, 5.2%, 100% { opacity: 0; transform: scale(0.5); }
+          1.6% { opacity: 0.95; transform: scale(1); }
+          3.4% { opacity: 0.12; transform: scale(1.22); }
+        }
+        .dslr-kick { animation: dslrKick 3s ease-out infinite; }
+        @keyframes dslrKick {
+          0%, 5.2%, 100% { transform: translateY(0); }
+          1.6% { transform: translateY(2px) scale(1.02); }
+        }
+
+        /* film reel spooling out of the phone */
+        .film-reel-run { animation: reelScroll 7s linear infinite; }
+        @keyframes reelScroll { from { transform: translateY(0); } to { transform: translateY(-50%); } }
+        .sprockets-v {
+          background-image: radial-gradient(circle at center, rgba(245, 245, 247, 0.5) 2px, transparent 2.6px);
+          background-size: 9px 24px;
+          background-position: center;
+        }
 
         .reveal-clip { clip-path: inset(0 0 100% 0); transition: clip-path 1.2s cubic-bezier(0.16, 1, 0.3, 1); }
         .reveal-clip.is-visible { clip-path: inset(0 0 0% 0); }
@@ -157,15 +273,13 @@ export default function Landing({ onCreateEvent }) {
           background-size: 26px 20px; background-position: center 50%;
         }
 
-        .outline-text { color: transparent; -webkit-text-stroke: 1px rgba(245, 245, 247, 0.28); }
-
         .faq-answer { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0.5s cubic-bezier(0.16, 1, 0.3, 1); }
         .faq-answer.open { grid-template-rows: 1fr; }
         .faq-answer > div { overflow: hidden; }
 
         @media (prefers-reduced-motion: reduce) {
           .reveal-clip, .reveal-rise { transition: none; clip-path: none; opacity: 1; transform: none; }
-          .marquee-track { animation: none; }
+          .marquee-track, .dslr-flash, .dslr-kick, .film-reel-run { animation: none; }
         }
       `}</style>
 
@@ -210,7 +324,7 @@ export default function Landing({ onCreateEvent }) {
         </div>
 
         {menuOpen && (
-          <div className="md:hidden bg-[#0D0D0F] border-t border-[#1C1C1E] px-6 py-6 space-y-4">
+          <div className="md:hidden bg-[#0D0D0F]/95 backdrop-blur-xl border-t border-[#1C1C1E] px-6 py-6 space-y-4">
             {NAV_LINKS.map((l) => (
               <button key={l.href} onClick={() => scrollTo(l.href)} className="block text-sm text-neutral-300 uppercase tracking-wide">
                 {l.label}
@@ -290,17 +404,13 @@ export default function Landing({ onCreateEvent }) {
         </div>
       </section>
 
-      {/* ── MARQUEE ─────────────────────────────────────────────────────── */}
-      <section className="border-y border-[#1C1C1E] py-5 overflow-hidden" aria-hidden="true">
-        <div className="marquee-track">
+      {/* ── MARQUEE — CINEMATIC FILM SCENE ─────────────────────────────── */}
+      <section className="border-y border-[#1C1C1E] bg-[#0A0A0A]/60 backdrop-blur-md py-7 overflow-hidden" aria-hidden="true">
+        <div className="marquee-track items-center">
           {[0, 1].map((dup) => (
-            <div key={dup} className="flex shrink-0">
-              {MARQUEE_ITEMS.map((item, i) => (
-                <span key={i} className="flex items-center gap-6 px-6">
-                  <span className="outline-text font-display text-2xl md:text-3xl font-semibold whitespace-nowrap">{item}</span>
-                  <span className="text-amber-500 text-lg">✦</span>
-                </span>
-              ))}
+            <div key={dup} className="flex shrink-0 items-center">
+              <MarqueeScene />
+              <MarqueeScene />
             </div>
           ))}
         </div>
@@ -365,7 +475,7 @@ export default function Landing({ onCreateEvent }) {
       </section>
 
       {/* ── HOW IT WORKS ────────────────────────────────────────────────── */}
-      <section id="how-it-works" className="py-24 md:py-32 bg-[#0D0D0F] border-y border-[#1C1C1E]">
+      <section id="how-it-works" className="py-24 md:py-32 bg-[#0D0D0F]/75 backdrop-blur-xl border-y border-[#1C1C1E]">
         <div className="max-w-6xl mx-auto px-6">
           <p data-reveal-rise className="text-[11px] uppercase tracking-[0.3em] text-amber-500/90 mb-4 font-medium">How it works</p>
           <h2 data-reveal-rise data-delay="80" className="font-display text-4xl md:text-6xl tracking-tight text-white">
@@ -459,7 +569,7 @@ export default function Landing({ onCreateEvent }) {
       </section>
 
       {/* ── FOOTER ──────────────────────────────────────────────────────── */}
-      <footer className="bg-[#080808] border-t border-[#1C1C1E] pt-16 pb-10">
+      <footer className="bg-[#080808]/70 backdrop-blur-xl border-t border-[#1C1C1E] pt-16 pb-10">
         <div className="max-w-6xl mx-auto px-6">
           <p data-reveal-rise className="font-serif-accent text-2xl md:text-3xl text-neutral-300 max-w-xl">
             “A single day becomes timeless, when remembered together.”
