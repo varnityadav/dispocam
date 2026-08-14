@@ -137,9 +137,10 @@ function MarqueeScene() {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-export default function Landing({ onCreateEvent }) {
+export default function Landing({ onCreateEvent, user, onSignIn, onSignOut }) {
   const [scrolled, setScrolled] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [openFaq, setOpenFaq] = useState(0);
   const [siteQr, setSiteQr] = useState('');
   const progressRef = useRef(null);
@@ -305,6 +306,44 @@ export default function Landing({ onCreateEvent }) {
           </div>
 
           <div className="flex items-center gap-3">
+            {user ? (
+              <div className="relative">
+                <button
+                  onClick={() => setUserMenuOpen(!userMenuOpen)}
+                  aria-label="Account menu"
+                  className="hidden md:flex items-center gap-2 border border-[#2C2C2E] rounded-full pl-1.5 pr-4 py-1.5 hover:border-amber-500/50 transition-colors"
+                >
+                  {user.user_metadata?.avatar_url ? (
+                    <img src={user.user_metadata.avatar_url} alt="" className="w-7 h-7 rounded-full" />
+                  ) : (
+                    <span className="w-7 h-7 rounded-full bg-amber-500/15 border border-amber-500/40 text-amber-400 text-xs font-semibold flex items-center justify-center">
+                      {(user.email || 'U').charAt(0).toUpperCase()}
+                    </span>
+                  )}
+                  <span className="text-[13px] text-white max-w-[110px] truncate">
+                    {user.user_metadata?.full_name || user.email?.split('@')[0] || 'Account'}
+                  </span>
+                </button>
+                {userMenuOpen && (
+                  <div className="absolute right-0 mt-2 w-52 bg-[#121214] border border-[#2C2C2E] rounded-xl shadow-2xl py-1 z-50">
+                    <p className="px-4 py-2 text-xs text-neutral-500 truncate border-b border-[#1C1C1E]">{user.email}</p>
+                    <button
+                      onClick={onSignOut}
+                      className="w-full text-left px-4 py-2.5 text-[13px] text-red-400/90 hover:bg-[#1A1A1E] transition-colors"
+                    >
+                      Sign out
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <button
+                onClick={onSignIn}
+                className="hidden md:inline-block border border-[#2C2C2E] text-neutral-300 text-[13px] font-medium px-5 py-2.5 rounded-full hover:border-amber-500/50 hover:text-amber-400 transition-colors"
+              >
+                Sign in
+              </button>
+            )}
             <button
               onClick={handleCreate}
               className="hidden md:inline-block bg-white text-black text-[13px] font-medium px-5 py-2.5 rounded-full hover:bg-amber-400 transition-colors shadow-lg"
@@ -329,6 +368,16 @@ export default function Landing({ onCreateEvent }) {
                 {l.label}
               </button>
             ))}
+            {user ? (
+              <div className="flex items-center justify-between border border-[#2C2C2E] rounded-full px-4 py-2">
+                <span className="text-sm text-white truncate max-w-[210px]">{user.email}</span>
+                <button onClick={onSignOut} className="text-xs text-red-400 ml-3">Sign out</button>
+              </div>
+            ) : (
+              <button onClick={() => { setMenuOpen(false); onSignIn(); }} className="w-full border border-[#2C2C2E] text-sm text-neutral-300 py-3 rounded-full hover:border-amber-500/50 transition-colors">
+                Sign in with Google
+              </button>
+            )}
             <button onClick={handleCreate} className="w-full bg-white text-black text-sm font-medium py-3 rounded-full">
               Create an Event
             </button>

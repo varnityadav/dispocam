@@ -108,6 +108,10 @@ export default function DispcamApp() {
   // Unlocked Developed Gallery State
   const [photos, setPhotos] = useState([]);
 
+  // Google sign-in session (Supabase Auth)
+  const [user, setUser] = useState(null);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+
   // Intercept incoming room deep links
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -117,6 +121,33 @@ export default function DispcamApp() {
       evaluateRoomRoute(room);
     }
   }, []);
+
+  // Restore any existing Google sign-in session (also completes the OAuth callback)
+  useEffect(() => {
+    if (!supabase) return;
+    supabase.auth.getSession().then(({ data }) => {
+      if (data?.session) setUser(data.session.user);
+    });
+    const { data: authSub } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+    });
+    return () => authSub?.subscription?.unsubscribe();
+  }, []);
+
+  const signInWithGoogle = async () => {
+    if (!supabase) { alert(NOT_CONFIGURED); return; }
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: { redirectTo: typeof window !== 'undefined' ? window.location.origin : undefined },
+    });
+    if (error) alert('Sign in failed: ' + error.message);
+  };
+
+  const handleSignOut = async () => {
+    setUserMenuOpen(false);
+    if (!supabase) return;
+    await supabase.auth.signOut();
+  };
 
   // Make the browser Back button work: each view pushes its own history state,
   // so Back restores the previous view instead of dumping the app to a blank page.
@@ -419,7 +450,7 @@ export default function DispcamApp() {
     <>
       {/* LANDING PAGE — the new home (skipped when arriving via a ?room= link) */}
       {view === 'landing' && (
-        <Landing onCreateEvent={handleEnterApp} />
+        <Landing onCreateEvent={handleEnterApp} user={user} onSignIn={signInWithGoogle} onSignOut={handleSignOut} />
       )}
 
       {/* APP VIEWS */}
@@ -490,6 +521,9 @@ export default function DispcamApp() {
         <div className="w-full max-w-md border border-[#1C1C1E] bg-[#121214] rounded-3xl p-8 shadow-2xl">
           <h1 className="text-3xl font-light tracking-tight text-center mb-1 text-white">DispoCam.</h1>
           <p className="text-xs text-neutral-500 text-center mb-8 uppercase tracking-widest">No Previews. No Retakes.</p>
+          {user && (
+            <p className="-mt-5 mb-6 text-center text-[11px] text-neutral-600">Signed in as <span className="text-neutral-400">{user.email}</span></p>
+          )}
 
           {!generatedLink ? (
             <form onSubmit={handleCreateEvent} className="space-y-6">
