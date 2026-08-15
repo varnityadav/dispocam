@@ -143,6 +143,17 @@ export default function DispcamApp() {
   const [user, setUser] = useState(null);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
 
+  // Events library ("Events" view) + auth modal (Google / phone OTP)
+  const [eventsList, setEventsList] = useState(null);
+  const [eventsBusy, setEventsBusy] = useState(false);
+  const [eventsError, setEventsError] = useState('');
+  const [authModal, setAuthModal] = useState('closed'); // 'closed' | 'phone'
+  const [phoneStep, setPhoneStep] = useState('input'); // 'input' | 'otp'
+  const [authPhone, setAuthPhone] = useState('');
+  const [authOtp, setAuthOtp] = useState('');
+  const [authMsg, setAuthMsg] = useState('');
+  const [authBusy, setAuthBusy] = useState(false);
+
   // Intercept incoming room deep links
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -183,6 +194,57 @@ export default function DispcamApp() {
     setUserMenuOpen(false);
     if (!supabase) return;
     await supabase.auth.signOut();
+  };
+
+  // ── Phone (OTP) sign-in — needs phone auth enabled in Supabase ────────────
+  const openPhoneAuth = () => {
+    setAuthPhone('');
+    setAuthOtp('');
+    setAuthMsg('');
+    setPhoneStep('input');
+    setAuthModal('phone');
+  };
+
+  const closeAuthModal = () => {
+    setAuthModal('closed');
+    setAuthMsg('');
+  };
+
+  const sendPhoneOtp = async (e) => {
+    e.preventDefault();
+    if (!supabase) { setAuthMsg(NOT_CONFIGURED); return; }
+    const phone = authPhone.trim();
+    if (!/^\+[1-9]\d{7,14}$/.test(phone)) {
+      setAuthMsg('Enter a valid phone with country code, e.g. +91 98765 43210');
+      return;
+    }
+    setAuthBusy(true); setAuthMsg('');
+    try {
+      const { error } = await supabase.auth.signInWithOtp({ phone, options: { channel: 'sms' } });
+      if (error) throw error;
+      setPhoneStep('otp');
+      setAuthMsg('Code sent to ' + phone + ' — enter the 6-digit OTP below.');
+    } catch (err) {
+      setAuthMsg('Could not send the code: ' + err.message);
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const verifyPhoneOtp = async (e) => {
+    e.preventDefault();
+    if (!supabase) { setAuthMsg(NOT_CONFIGURED); return; }
+    if (!authOtp.trim()) { setAuthMsg('Enter the code you received'); return; }
+    setAuthBusy(true); setAuthMsg('');
+    try {
+      const { error } = await supabase.auth.verifyOtp({ phone: authPhone.trim(), token: authOtp.trim(), type: 'sms' });
+      if (error) throw error;
+      closeAuthModal(); // user state updates via onAuthStateChange
+    } catch (err) {
+      setAuthMsg('Verification failed: ' + err.message);
+    } finally {
+      setAuthBusy(false);
+    }
   };
 
   // Make the browser Back button work: each view pushes its own history state,
@@ -711,11 +773,72 @@ export default function DispcamApp() {
     handleEnterApp();
   };
 
+  // ── Events library — every film, developed or still sealed ────────────────
+  const loadEvents = async () => {
+    try {
+      if (!supabase) throw new Error(NOT_CONFIGURED);
+      setEventsBusy(true);
+      setEventsError('');
+      const { data: evs, error } = await supabase
+        .from('events')
+        .select('id, name, reveal_at, max_photos_limit, max_guests, plan, host_email, created_at')
+        .order('created_at', { ascending: false });
+      if (error) throw error;
+      const { data: photoRows, error: pErr } = await supabase.from('photos').select('event_id');
+      if (pErr) throw pErr;
+      const counts = {};
+      (photoRows || []).forEach((p) => { counts[p.event_id] = (counts[p.event_id] || 0) + 1; });
+      setEventsList((evs || []).map((e) => ({ ...e, photoCount: counts[e.id] || 0 })));
+    } catch (e) {
+      setEventsError(e.message);
+      setEventsList(null);
+    } finally {
+      setEventsBusy(false);
+    }
+  };
+
+  const openEvents = () => {
+    if (typeof window !== 'undefined') window.scrollTo(0, 0);
+    setView('events');
+    if (typeof window !== 'undefined') {
+      const st = window.history.state;
+      if (!(st && st.dispcam && st.view === 'events')) {
+        window.history.pushState({ dispcam: true, view: 'events' }, '');
+      }
+    }
+    loadEvents();
+  };
+
+  // Share an event link straight to WhatsApp
+  const shareOnWhatsApp = (link, name) => {
+    const msg = `🎞️ ${name} — shoot into our DispoCam film roll!\n\nTap to join, no app needed:\n${link}`;
+    window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`, '_blank', 'noopener');
+  };
+
+  // Download a permanent QR for any event (works from the Events page too)
+  const downloadEventQr = (link, name) => {
+    QRCode.toDataURL(link, {
+      width: 512,
+      margin: 2,
+      color: { dark: '#0A0A0A', light: '#FFFFFF' },
+    })
+      .then((dataUrl) => {
+        const safeName = String(name || 'event').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'event';
+        const a = document.createElement('a');
+        a.href = dataUrl;
+        a.download = `dispocam-${safeName}-qr.png`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      })
+      .catch((err) => console.warn('QR generation failed:', err));
+  };
+
   return (
     <>
       {/* LANDING PAGE — the new home (skipped when arriving via a ?room= link) */}
       {view === 'landing' && (
-        <Landing onCreateEvent={handleEnterApp} onChooseTier={handleChooseTier} user={user} onSignIn={signInWithGoogle} onSignOut={handleSignOut} />
+        <Landing onCreateEvent={handleEnterApp} onChooseTier={handleChooseTier} onOpenEvents={openEvents} onOpenAuth={openPhoneAuth} user={user} onSignOut={handleSignOut} />
       )}
 
       {/* APP VIEWS */}
@@ -877,6 +1000,13 @@ export default function DispcamApp() {
                   <p className="text-xs text-neutral-500">Scan anytime — this QR works forever.</p>
                 </div>
               )}
+              <button
+                onClick={() => shareOnWhatsApp(generatedLink, eventName)}
+                className="w-full flex items-center justify-center gap-2 bg-[#25D366] text-black font-semibold py-3 rounded-xl text-sm hover:bg-[#1fb457] transition shadow-lg"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M17.5 14.4c-.3-.15-1.76-.87-2.03-.97-.27-.1-.47-.15-.67.15-.2.3-.77.97-.94 1.17-.17.2-.35.22-.65.07-.3-.15-1.26-.46-2.4-1.48-.89-.79-1.49-1.77-1.66-2.07-.17-.3-.02-.46.13-.61.13-.13.3-.35.45-.52.15-.17.2-.3.3-.5.1-.2.05-.37-.02-.52-.07-.15-.67-1.62-.92-2.22-.24-.58-.49-.5-.67-.51h-.57c-.2 0-.52.07-.8.37-.27.3-1.04 1.02-1.04 2.5 0 1.47 1.07 2.9 1.22 3.1.15.2 2.1 3.2 5.1 4.49.71.3 1.27.49 1.7.63.72.23 1.37.2 1.88.12.57-.09 1.76-.72 2.01-1.41.25-.7.25-1.29.17-1.41-.07-.13-.27-.2-.57-.35zM12.04 21.5h-.01a9.4 9.4 0 0 1-4.8-1.32l-.34-.2-3.56.93.95-3.47-.22-.36a9.42 9.42 0 0 1-1.44-5.02c0-5.2 4.24-9.44 9.45-9.44a9.4 9.4 0 0 1 6.68 2.77 9.39 9.39 0 0 1 2.76 6.69c0 5.2-4.24 9.43-9.46 9.43z"/></svg>
+                Share on WhatsApp
+              </button>
               <div className="grid grid-cols-2 gap-3">
                 <button 
                   onClick={() => { navigator.clipboard.writeText(generatedLink); alert('Link copied!'); }}
@@ -1116,7 +1246,154 @@ export default function DispcamApp() {
           )}
         </div>
       )}
+      {/* VIEW 5: EVENTS — the film library */}
+      {view === 'events' && (
+        <div className="w-full max-w-4xl p-4">
+          <header className="flex items-center justify-between">
+            <button onClick={() => setView('landing')} className="font-display text-lg tracking-tight text-white">
+              Dispo<span className="text-amber-500">Cam</span>.
+            </button>
+            <div className="flex items-center gap-3">
+              <button onClick={handleEnterApp} className="bg-white text-black text-xs font-medium px-4 py-2 rounded-full hover:bg-amber-400 transition">
+                + Create an Event
+              </button>
+              <button onClick={() => setView('landing')} className="border border-[#2C2C2E] text-neutral-300 text-xs px-4 py-2 rounded-full hover:border-amber-500/50 transition">
+                Home
+              </button>
+            </div>
+          </header>
+
+          <div className="text-center my-10 md:my-14">
+            <p className="text-[11px] uppercase tracking-[0.3em] text-amber-500/90 mb-3 font-medium">The film library</p>
+            <h1 className="font-display text-4xl md:text-5xl tracking-tight text-white">Events.</h1>
+            <p className="mt-3 text-sm text-neutral-400 max-w-md mx-auto">Every film roll — developed, or still sealed in the darkroom.</p>
+          </div>
+
+          {eventsList === null && eventsBusy ? (
+            <p className="text-center py-16 text-neutral-500 text-sm animate-pulse">Developing the library…</p>
+          ) : eventsError ? (
+            <div className="text-center py-16 space-y-3">
+              <p className="text-neutral-500 font-light text-sm">Couldn't load events: {eventsError}</p>
+              <button onClick={loadEvents} className="border border-[#2C2C2E] text-amber-400 text-xs px-5 py-2.5 rounded-full hover:border-amber-500/50 transition">
+                Retry
+              </button>
+            </div>
+          ) : eventsList === null || eventsList.length === 0 ? (
+            <p className="text-center py-16 text-neutral-600 font-light text-sm">No events yet — create the first roll.</p>
+          ) : (
+            <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {eventsList.map((ev) => {
+                const developed = new Date() > new Date(ev.reveal_at);
+                const link = `${typeof window !== 'undefined' ? window.location.origin : ''}?room=${ev.id}`;
+                const tierLabel = ev.plan === 'free' ? 'Free roll' : TIERS[ev.plan] ? `${ev.max_guests} guests · paid` : ev.plan;
+                return (
+                  <div key={ev.id} className="rounded-2xl border border-[#1C1C1E] bg-[#121214] overflow-hidden flex flex-col hover:border-amber-500/40 transition-colors duration-500">
+                    <button onClick={() => evaluateRoomRoute(ev.id)} className="text-left p-5 flex-1 group">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className={`text-[10px] uppercase tracking-widest px-2.5 py-1 rounded-full border ${developed ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' : 'text-amber-400 border-amber-500/30 bg-amber-500/10'}`}>
+                          {developed ? 'Developed' : 'Developing'}
+                        </span>
+                        <span className="text-[10px] text-neutral-600">{new Date(ev.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}</span>
+                      </div>
+                      <h3 className="font-display text-xl text-white mt-3 tracking-tight group-hover:text-amber-300 transition-colors">{ev.name}</h3>
+                      <p className="text-xs text-neutral-500 mt-1.5">{ev.photoCount} shots · {ev.max_guests} guests · {tierLabel}</p>
+                      <p className="text-[11px] text-amber-500/80 mt-4 uppercase tracking-widest">Open film →</p>
+                    </button>
+                    <div className="grid grid-cols-3 gap-2 p-3 border-t border-[#1C1C1E] bg-[#0F0F11]">
+                      <button
+                        onClick={() => shareOnWhatsApp(link, ev.name)}
+                        className="flex items-center justify-center gap-1 bg-[#25D366] text-black text-[11px] font-semibold py-2 rounded-lg hover:bg-[#1fb457] transition"
+                      >
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M17.5 14.4c-.3-.15-1.76-.87-2.03-.97-.27-.1-.47-.15-.67.15-.2.3-.77.97-.94 1.17-.17.2-.35.22-.65.07-.3-.15-1.26-.46-2.4-1.48-.89-.79-1.49-1.77-1.66-2.07-.17-.3-.02-.46.13-.61.13-.13.3-.35.45-.52.15-.17.2-.3.3-.5.1-.2.05-.37-.02-.52-.07-.15-.67-1.62-.92-2.22-.24-.58-.49-.5-.67-.51h-.57c-.2 0-.52.07-.8.37-.27.3-1.04 1.02-1.04 2.5 0 1.47 1.07 2.9 1.22 3.1.15.2 2.1 3.2 5.1 4.49.71.3 1.27.49 1.7.63.72.23 1.37.2 1.88.12.57-.09 1.76-.72 2.01-1.41.25-.7.25-1.29.17-1.41-.07-.13-.27-.2-.57-.35zM12.04 21.5h-.01a9.4 9.4 0 0 1-4.8-1.32l-.34-.2-3.56.93.95-3.47-.22-.36a9.42 9.42 0 0 1-1.44-5.02c0-5.2 4.24-9.44 9.45-9.44a9.4 9.4 0 0 1 6.68 2.77 9.39 9.39 0 0 1 2.76 6.69c0 5.2-4.24 9.43-9.46 9.43z"/></svg>
+                        Share
+                      </button>
+                      <button
+                        onClick={() => { navigator.clipboard.writeText(link); alert('Link copied!'); }}
+                        className="flex items-center justify-center border border-[#2C2C2E] text-neutral-300 text-[11px] py-2 rounded-lg hover:border-amber-500/50 hover:text-white transition"
+                      >
+                        Copy
+                      </button>
+                      <button
+                        onClick={() => downloadEventQr(link, ev.name)}
+                        className="flex items-center justify-center border border-[#2C2C2E] text-neutral-300 text-[11px] py-2 rounded-lg hover:border-amber-500/50 hover:text-white transition"
+                      >
+                        QR
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
       </div>
+      )}
+
+      {/* AUTH MODAL — Google or phone OTP */}
+      {authModal === 'phone' && (
+        <div className="fixed inset-0 z-[100] bg-black/75 backdrop-blur-sm flex items-center justify-center p-4" onClick={closeAuthModal}>
+          <div className="w-full max-w-sm bg-[#121214] border border-[#2C2C2E] rounded-3xl p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-5">
+              <h3 className="font-display text-xl text-white tracking-tight">Sign in to DispoCam</h3>
+              <button onClick={closeAuthModal} aria-label="Close" className="w-8 h-8 rounded-full border border-[#2C2C2E] text-neutral-400 hover:text-white transition">✕</button>
+            </div>
+
+            <button
+              onClick={signInWithGoogle}
+              className="w-full flex items-center justify-center gap-2.5 border border-[#2C2C2E] rounded-xl py-3 text-sm text-white hover:border-amber-500/50 hover:bg-[#1A1A1E] transition"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24"><path fill="#4285F4" d="M23.5 12.27c0-.85-.08-1.66-.22-2.45H12v4.64h6.46a5.53 5.53 0 0 1-2.4 3.63v3h3.87c2.27-2.1 3.57-5.17 3.57-8.82z"/><path fill="#34A853" d="M12 24c3.24 0 5.96-1.08 7.93-2.91l-3.87-3c-1.07.72-2.44 1.15-4.06 1.15-3.13 0-5.78-2.11-6.72-4.95H1.28v3.1A12 12 0 0 0 12 24z"/><path fill="#FBBC05" d="M5.28 14.29a7.2 7.2 0 0 1 0-4.58v-3.1H1.28a12 12 0 0 0 0 10.78l4-3.1z"/><path fill="#EA4335" d="M12 4.76c1.76 0 3.34.61 4.58 1.8l3.43-3.43A11.97 11.97 0 0 0 1.28 6.6l4 3.1C6.22 6.87 8.87 4.76 12 4.76z"/></svg>
+              Continue with Google
+            </button>
+
+            <div className="flex items-center gap-3 my-4 text-[10px] uppercase tracking-widest text-neutral-600">
+              <span className="flex-1 h-px bg-[#2C2C2E]" /> or <span className="flex-1 h-px bg-[#2C2C2E]" />
+            </div>
+
+            {phoneStep === 'input' ? (
+              <form onSubmit={sendPhoneOtp} className="space-y-3">
+                <input
+                  type="tel"
+                  required
+                  placeholder="+91 98765 43210"
+                  value={authPhone}
+                  onChange={(e) => setAuthPhone(e.target.value)}
+                  className="w-full bg-[#1A1A1E] border border-[#2C2C2E] rounded-xl px-4 py-3 text-sm text-white text-center focus:outline-none focus:border-amber-500/50 transition"
+                />
+                <button
+                  disabled={authBusy}
+                  className="w-full bg-amber-400 text-black font-semibold py-3 rounded-xl text-sm hover:bg-amber-300 transition disabled:opacity-50"
+                >
+                  {authBusy ? 'Sending…' : 'Send code by SMS'}
+                </button>
+              </form>
+            ) : (
+              <form onSubmit={verifyPhoneOtp} className="space-y-3">
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  required
+                  placeholder="6-digit code"
+                  value={authOtp}
+                  onChange={(e) => setAuthOtp(e.target.value.replace(/\D/g, ''))}
+                  className="w-full bg-[#1A1A1E] border border-[#2C2C2E] rounded-xl px-4 py-3 text-sm text-white text-center tracking-[0.4em] focus:outline-none focus:border-amber-500/50 transition"
+                />
+                <button
+                  disabled={authBusy}
+                  className="w-full bg-amber-400 text-black font-semibold py-3 rounded-xl text-sm hover:bg-amber-300 transition disabled:opacity-50"
+                >
+                  {authBusy ? 'Verifying…' : 'Verify & Sign in'}
+                </button>
+                <button type="button" onClick={() => setPhoneStep('input')} className="w-full text-[11px] text-neutral-500 hover:text-neutral-300 transition">
+                  ← Change number
+                </button>
+              </form>
+            )}
+
+            {authMsg && <p className="mt-4 text-[11px] text-amber-300/90 leading-relaxed">{authMsg}</p>}
+          </div>
+        </div>
       )}
     </>
   );

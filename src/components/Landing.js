@@ -28,6 +28,7 @@ const PARTY_BG = 'https://images.unsplash.com/photo-1492684223066-81342ee5ff30?w
 const REEL_FRAMES = [LOEWE.campaign1, LOEWE.amazona, LOEWE.campaign2, LOEWE.rtw];
 
 const NAV_LINKS = [
+  { label: 'Events',      href: '#events', app: true },
   { label: 'How it works', href: '#how-it-works' },
   { label: 'Pricing',      href: '#pricing' },
   { label: 'Use cases',    href: '#use-cases' },
@@ -143,7 +144,7 @@ function MarqueeScene() {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-export default function Landing({ onCreateEvent, onChooseTier, user, onSignIn, onSignOut }) {
+export default function Landing({ onCreateEvent, onChooseTier, onOpenEvents, onOpenAuth, user, onSignOut }) {
   const [scrolled, setScrolled] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
@@ -310,7 +311,7 @@ export default function Landing({ onCreateEvent, onChooseTier, user, onSignIn, o
 
           <div className="hidden md:flex items-center gap-8">
             {NAV_LINKS.map((l) => (
-              <button key={l.href} onClick={() => scrollTo(l.href)} className="text-[13px] tracking-wide text-neutral-400 hover:text-white transition-colors uppercase">
+              <button key={l.href} onClick={() => (l.app ? onOpenEvents?.() : scrollTo(l.href))} className="text-[13px] tracking-wide text-neutral-400 hover:text-white transition-colors uppercase">
                 {l.label}
               </button>
             ))}
@@ -349,7 +350,7 @@ export default function Landing({ onCreateEvent, onChooseTier, user, onSignIn, o
               </div>
             ) : (
               <button
-                onClick={onSignIn}
+                onClick={onOpenAuth}
                 className="hidden md:inline-block border border-[#2C2C2E] text-neutral-300 text-[13px] font-medium px-5 py-2.5 rounded-full hover:border-amber-500/50 hover:text-amber-400 transition-colors"
               >
                 Sign in
@@ -375,7 +376,15 @@ export default function Landing({ onCreateEvent, onChooseTier, user, onSignIn, o
         {menuOpen && (
           <div className="md:hidden bg-[#0D0D0F]/95 backdrop-blur-xl border-t border-[#1C1C1E] px-6 py-6 space-y-4">
             {NAV_LINKS.map((l) => (
-              <button key={l.href} onClick={() => scrollTo(l.href)} className="block text-sm text-neutral-300 uppercase tracking-wide">
+              <button
+                key={l.href}
+                onClick={() => {
+                  setMenuOpen(false);
+                  if (l.app) onOpenEvents?.();
+                  else scrollTo(l.href);
+                }}
+                className="block text-sm text-neutral-300 uppercase tracking-wide"
+              >
                 {l.label}
               </button>
             ))}
@@ -385,8 +394,8 @@ export default function Landing({ onCreateEvent, onChooseTier, user, onSignIn, o
                 <button onClick={onSignOut} className="text-xs text-red-400 ml-3">Sign out</button>
               </div>
             ) : (
-              <button onClick={() => { setMenuOpen(false); onSignIn(); }} className="w-full border border-[#2C2C2E] text-sm text-neutral-300 py-3 rounded-full hover:border-amber-500/50 transition-colors">
-                Sign in with Google
+              <button onClick={() => { setMenuOpen(false); onOpenAuth?.(); }} className="w-full border border-[#2C2C2E] text-sm text-neutral-300 py-3 rounded-full hover:border-amber-500/50 transition-colors">
+                Sign in — Google or phone
               </button>
             )}
             <button onClick={handleCreate} className="w-full bg-white text-black text-sm font-medium py-3 rounded-full">
@@ -691,6 +700,7 @@ export default function Landing({ onCreateEvent, onChooseTier, user, onSignIn, o
               <p className="text-[11px] uppercase tracking-[0.25em] text-neutral-600 mb-4">Product</p>
               <button onClick={() => scrollTo('#how-it-works')} className="block text-sm text-neutral-400 hover:text-white py-1 transition-colors">How it works</button>
               <button onClick={() => scrollTo('#pricing')} className="block text-sm text-neutral-400 hover:text-white py-1 transition-colors">Pricing</button>
+              <button onClick={onOpenEvents} className="block text-sm text-neutral-400 hover:text-white py-1 transition-colors">Events</button>
               <button onClick={() => scrollTo('#faq')} className="block text-sm text-neutral-400 hover:text-white py-1 transition-colors">FAQ</button>
             </div>
             <div>
