@@ -14,6 +14,29 @@ const MEDIA_BASE_URL = process.env.NEXT_PUBLIC_MEDIA_BASE_URL || '';
 const NOT_CONFIGURED = 'Missing Supabase or R2 configuration. Check your .env.local and build.';
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+// Event pricing tiers — free forever up to 10 guests; paid capacity = 25 shots/guest.
+const TIERS = {
+  free: { guests: 10, shots: 10, price: 0 },
+  t50: { guests: 50, shots: 25, price: 1799 },
+  t100: { guests: 100, shots: 25, price: 3499 },
+  t150: { guests: 150, shots: 25, price: 4799 },
+  t200: { guests: 200, shots: 25, price: 5799 },
+  t250: { guests: 250, shots: 25, price: 6899 },
+  t300: { guests: 300, shots: 25, price: 7999 },
+  t350: { guests: 350, shots: 25, price: 8999 },
+};
+const TIER_LIST = Object.entries(TIERS).map(([id, t]) => ({ id, ...t }));
+
+// Inject Razorpay's checkout script on demand (static-export safe).
+const loadRazorpayScript = () => new Promise((resolve) => {
+  if (typeof window !== 'undefined' && window.Razorpay) return resolve(true);
+  const s = document.createElement('script');
+  s.src = 'https://checkout.razorpay.com/v1/checkout.js';
+  s.onload = () => resolve(true);
+  s.onerror = () => resolve(false);
+  document.head.appendChild(s);
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Mechanical split-flap countdown — one digit tumbles at a time, like a
 // real departure-board flip clock.
@@ -89,7 +112,9 @@ export default function DispcamApp() {
   // Host Configuration States
   const [eventName, setEventName] = useState('');
   const [duration, setDuration] = useState('2');
-  const [maxPhotos, setMaxPhotos] = useState('10');
+  const [selectedTier, setSelectedTier] = useState('free');
+  const [paying, setPaying] = useState(false);
+  const [payError, setPayError] = useState('');
   const [generatedLink, setGeneratedLink] = useState('');
   const [qrDataUrl, setQrDataUrl] = useState('');
 
@@ -266,40 +291,117 @@ export default function DispcamApp() {
     }
   };
 
+  const showShareScreen = (eventId) => {
+    const roomUrl = `${window.location.origin}?room=${eventId}`;
+    setGeneratedLink(roomUrl);
+    // Permanent QR code for this event (works forever, unlocks gallery after reveal)
+    QRCode.toDataURL(roomUrl, {
+      width: 512,
+      margin: 2,
+      color: { dark: '#0A0A0A', light: '#FFFFFF' }
+    }).then(setQrDataUrl).catch((err) => console.warn('QR generation failed:', err));
+  };
+
   const handleCreateEvent = async (e) => {
     e.preventDefault();
     if (!eventName) return;
     setQrDataUrl('');
+    setPayError('');
 
     const revealAt = new Date();
     revealAt.setHours(revealAt.getHours() + parseInt(duration));
+    const tier = TIERS[selectedTier];
 
     try {
       if (!supabase) throw new Error(NOT_CONFIGURED);
 
-      const { data, error } = await supabase
-        .from('events')
-        .insert({
-          name: eventName,
-          reveal_at: revealAt.toISOString(),
-          max_photos_limit: parseInt(maxPhotos)
-        })
-        .select('id')
-        .single();
+      // FREE TIER — event created instantly
+      if (tier.price === 0) {
+        let { data, error } = await supabase
+          .from('events')
+          .insert({
+            name: eventName,
+            reveal_at: revealAt.toISOString(),
+            max_photos_limit: tier.shots,
+            max_guests: tier.guests,
+            plan: 'free'
+          })
+          .select('id')
+          .single();
+        // Graceful guard: if the paid-tier columns aren't in the DB yet
+        // (schema.sql not re-run), retry with the original shape.
+        if (error && /max_guests|plan/.test(error.message)) {
+          const retry = await supabase
+            .from('events')
+            .insert({ name: eventName, reveal_at: revealAt.toISOString(), max_photos_limit: tier.shots })
+            .select('id')
+            .single();
+          data = retry.data;
+          error = retry.error;
+        }
+        if (error) throw error;
+        showShareScreen(data.id);
+        return;
+      }
 
-      if (error) throw error;
+      // PAID TIER — Razorpay checkout; the event is created server-side only
+      // after the Worker verifies the payment signature.
+      if (!R2_WORKER_URL) throw new Error(NOT_CONFIGURED);
+      setPaying(true);
 
-      const roomUrl = `${window.location.origin}?room=${data.id}`;
-      setGeneratedLink(roomUrl);
+      const orderRes = await fetch(`${R2_WORKER_URL}/create-order`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tier: selectedTier, eventName }),
+      });
+      const order = await orderRes.json();
+      if (!orderRes.ok || order.error) throw new Error(order.error || 'Could not start payment');
 
-      // Render a permanent QR code for this event (works forever, unlocks gallery after reveal)
-      QRCode.toDataURL(roomUrl, {
-        width: 512,
-        margin: 2,
-        color: { dark: '#0A0A0A', light: '#FFFFFF' }
-      }).then(setQrDataUrl).catch((err) => console.warn('QR generation failed:', err));
-    } catch (error) {
-      alert("Error creating event: " + error.message);
+      const scriptLoaded = await loadRazorpayScript();
+      if (!scriptLoaded) throw new Error('Payment gateway could not be loaded');
+
+      const rzp = new window.Razorpay({
+        key: order.keyId,
+        amount: order.amount,
+        currency: order.currency,
+        name: 'DispoCam',
+        description: `${tier.guests} guests · ${tier.shots} shots each`,
+        order_id: order.orderId,
+        prefill: { name: user?.user_metadata?.full_name || '', email: user?.email || '' },
+        theme: { color: '#fbbf24' },
+        handler: async (res) => {
+          try {
+            const vRes = await fetch(`${R2_WORKER_URL}/verify-payment`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                eventName,
+                revealAt: revealAt.toISOString(),
+                tier: selectedTier,
+                orderId: res.razorpay_order_id,
+                paymentId: res.razorpay_payment_id,
+                signature: res.razorpay_signature,
+              }),
+            });
+            const v = await vRes.json();
+            if (!vRes.ok || v.error || !v.event) throw new Error(v.error || 'Payment verification failed');
+            setPaying(false);
+            showShareScreen(v.event.id);
+          } catch (err) {
+            setPaying(false);
+            setPayError('Payment succeeded but event creation failed — contact support with your payment id: ' + err.message);
+          }
+        },
+        modal: { ondismiss: () => setPaying(false) },
+      });
+      rzp.on('payment.failed', (resp) => {
+        setPaying(false);
+        setPayError('Payment failed — ' + (resp?.error?.description || 'please try again'));
+      });
+      rzp.open();
+    } catch (err) {
+      setPaying(false);
+      setPayError(err.message);
     }
   };
 
@@ -637,35 +739,56 @@ export default function DispcamApp() {
                   value={eventName} onChange={(e) => setEventName(e.target.value)}
                 />
               </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs uppercase tracking-wider text-neutral-400 mb-2 font-medium">Timer Lock</label>
-                  <select 
-                    className="w-full bg-[#1A1A1E] border border-[#2C2C2E] rounded-xl px-4 py-3 text-sm text-white focus:outline-none"
-                    value={duration} onChange={(e) => setDuration(e.target.value)}
-                  >
-                    <option value="1">1 Hour</option>
-                    <option value="2">2 Hours</option>
-                    <option value="6">6 Hours</option>
-                    <option value="12">12 Hours</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs uppercase tracking-wider text-neutral-400 mb-2 font-medium">Film Roll Limit</label>
-                  <select 
-                    className="w-full bg-[#1A1A1E] border border-[#2C2C2E] rounded-xl px-4 py-3 text-sm text-white focus:outline-none"
-                    value={maxPhotos} onChange={(e) => setMaxPhotos(e.target.value)}
-                  >
-                    <option value="3">3 Shots</option>
-                    <option value="5">5 Shots</option>
-                    <option value="10">10 Shots</option>
-                    <option value="27">27 Shots</option>
-                  </select>
+              <div>
+                <label className="block text-xs uppercase tracking-wider text-neutral-400 mb-2 font-medium">Timer Lock</label>
+                <select 
+                  className="w-full bg-[#1A1A1E] border border-[#2C2C2E] rounded-xl px-4 py-3 text-sm text-white focus:outline-none"
+                  value={duration} onChange={(e) => setDuration(e.target.value)}
+                >
+                  <option value="1">1 Hour</option>
+                  <option value="2">2 Hours</option>
+                  <option value="6">6 Hours</option>
+                  <option value="12">12 Hours</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs uppercase tracking-wider text-neutral-400 mb-2 font-medium">Event Capacity</label>
+                <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                  {TIER_LIST.map((t) => (
+                    <button
+                      type="button"
+                      key={t.id}
+                      onClick={() => setSelectedTier(t.id)}
+                      className={`w-full flex items-center justify-between px-4 py-2.5 rounded-xl border text-left transition
+                        ${selectedTier === t.id ? 'border-amber-500/60 bg-amber-500/5' : 'border-[#2C2C2E] hover:border-neutral-600'}`}
+                    >
+                      <div>
+                        <p className="text-sm text-white font-medium">{t.guests} guests</p>
+                        <p className="text-[11px] text-neutral-500">{t.shots} shots per guest</p>
+                      </div>
+                      <p className={`text-sm font-semibold ${t.price === 0 ? 'text-emerald-400' : 'text-amber-400'}`}>
+                        {t.price === 0 ? 'FREE' : `₹${t.price.toLocaleString('en-IN')}`}
+                      </p>
+                    </button>
+                  ))}
                 </div>
               </div>
-              <button type="submit" className="w-full bg-white text-black font-medium py-3 rounded-xl text-sm shadow-md">
-                Generate Film Roll
+
+              <button
+                type="submit"
+                disabled={paying}
+                className="w-full bg-white text-black font-medium py-3 rounded-xl text-sm shadow-md disabled:opacity-50"
+              >
+                {paying
+                  ? 'Opening secure payment…'
+                  : selectedTier === 'free'
+                  ? 'Generate Film Roll — Free'
+                  : `Pay ₹${TIERS[selectedTier].price.toLocaleString('en-IN')} & Create Event`}
               </button>
+              {payError && (
+                <p className="text-xs text-red-400 text-center leading-relaxed">{payError}</p>
+              )}
             </form>
           ) : (
             <div className="space-y-6 text-center">

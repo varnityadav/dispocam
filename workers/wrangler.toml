@@ -8,6 +8,13 @@ R2_ACCOUNT_ID = "1dc58ec75d43797233d8810af4cfb477"
 # Brevo sender email — verified in the Brevo dashboard
 BREVO_FROM_EMAIL = "varnityadav02001@gmail.com"
 
+# Razorpay — public key id (safe as a var; the secret is a Worker secret RAZORPAY_KEY_SECRET)
+RAZORPAY_KEY_ID = "rzp_live_TQ1uXmNzMp46EV"
+
+# Supabase — anon key is public (RLS guards the data); the Worker uses it to create paid events
+SUPABASE_URL = "https://bolzsnwoosicmkkbxerp.supabase.co"
+SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJvbHpzbndvb3NpY21ra2J4ZXJwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAzMzc1NTAsImV4cCI6MjA5NTkxMzU1MH0._Q8203Ogn4FqnJNLKBkoAiY51DZcC90AW3tO_drr1jQ"
+
 # Set these secrets via `wrangler secret put` (never commit them):
 #   R2_ACCESS_KEY_ID
 #   R2_SECRET_ACCESS_KEY

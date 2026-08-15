@@ -15,6 +15,12 @@ create table if not exists public.events (
 -- Add the photo-limit column if this table predates this schema
 alter table public.events add column if not exists max_photos_limit integer not null default 10;
 
+-- Paid-tier columns: guest capacity, plan id, and the Razorpay payment id
+-- (null for free events).
+alter table public.events add column if not exists max_guests integer default 10;
+alter table public.events add column if not exists plan text default 'free';
+alter table public.events add column if not exists payment_id text;
+
 -- Photos: one row per captured shot, pointing at its R2 object key
 create table if not exists public.photos (
   id uuid primary key default gen_random_uuid(),

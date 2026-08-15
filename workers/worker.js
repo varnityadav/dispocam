@@ -33,6 +33,51 @@ const corsHeaders = {
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Pricing tiers — free forever up to 10 guests, then paid capacity with 25 shots
+// per guest at a declining per-guest price (approved by the founder).
+const TIERS = {
+  free: { guests: 10, shots: 10, price: 0 },
+  t50: { guests: 50, shots: 25, price: 1799 },
+  t100: { guests: 100, shots: 25, price: 3499 },
+  t150: { guests: 150, shots: 25, price: 4799 },
+  t200: { guests: 200, shots: 25, price: 5799 },
+  t250: { guests: 250, shots: 25, price: 6899 },
+  t300: { guests: 300, shots: 25, price: 7999 },
+  t350: { guests: 350, shots: 25, price: 8999 },
+};
+
+// Verify a Razorpay checkout signature: HMAC-SHA256(order_id|payment_id, key_secret) in hex.
+async function verifyRazorpaySignature(secret, orderId, paymentId, signature) {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  const data = new TextEncoder().encode(`${orderId}|${paymentId}`);
+  const sig = await crypto.subtle.sign('HMAC', key, data);
+  const hex = [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  return hex === signature;
+}
+
+async function createRazorpayOrder(env, { tier, eventName }) {
+  const basic = btoa(`${env.RAZORPAY_KEY_ID}:${env.RAZORPAY_KEY_SECRET}`);
+  const res = await fetch('https://api.razorpay.com/v1/orders', {
+    method: 'POST',
+    headers: { Authorization: `Basic ${basic}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      amount: TIERS[tier].price * 100, // paise
+      currency: 'INR',
+      receipt: `dispocam_${Date.now()}`,
+      notes: { tier, eventName },
+    }),
+  });
+  const order = await res.json();
+  if (!res.ok) throw new Error(order?.error?.description || 'Razorpay order failed');
+  return order;
+}
 // Cap album size: keeps the Worker under memory/CPU limits for huge events.
 // The email notes when an album is truncated — the in-app gallery still has everything.
 const MAX_ALBUM_PHOTOS = 100;
@@ -201,6 +246,71 @@ export default {
         });
         const signed = await getSignedUrl(s3, command, { expiresIn: 300 });
         return json({ url: signed });
+      } catch (err) {
+        return json({ error: err.message }, 500);
+      }
+    }
+
+    // POST /create-order  body: { tier, eventName }  ->  { orderId, amount, currency, keyId, tier }
+    if (url.pathname === '/create-order' && request.method === 'POST') {
+      try {
+        const { tier, eventName } = await request.json();
+        const t = TIERS[tier];
+        if (!t || t.price <= 0) return json({ error: 'Invalid tier' }, 400);
+        if (!eventName || typeof eventName !== 'string' || eventName.length > 60) {
+          return json({ error: 'Invalid event name' }, 400);
+        }
+        const order = await createRazorpayOrder(env, { tier, eventName: String(eventName).slice(0, 60) });
+        return json({ orderId: order.id, amount: order.amount, currency: order.currency, keyId: env.RAZORPAY_KEY_ID, tier: t });
+      } catch (err) {
+        return json({ error: err.message }, 500);
+      }
+    }
+
+    // POST /verify-payment  body: { eventName, revealAt, tier, orderId, paymentId, signature }
+    // Verifies the Razorpay signature server-side, then creates the PAID event
+    // (capacity is server-set from the tier — clients can't inflate it).
+    if (url.pathname === '/verify-payment' && request.method === 'POST') {
+      try {
+        const { eventName, revealAt, tier, orderId, paymentId, signature } = await request.json();
+        const t = TIERS[tier];
+        if (!t || t.price <= 0) return json({ error: 'Invalid tier' }, 400);
+        if (!eventName || typeof eventName !== 'string' || eventName.length > 60) {
+          return json({ error: 'Invalid event name' }, 400);
+        }
+        if (!orderId || !paymentId || !signature) return json({ error: 'Missing payment fields' }, 400);
+
+        const revealDate = new Date(revealAt);
+        if (Number.isNaN(revealDate.getTime()) || revealDate.getTime() <= Date.now()) {
+          return json({ error: 'revealAt must be in the future' }, 400);
+        }
+
+        const valid = await verifyRazorpaySignature(env.RAZORPAY_KEY_SECRET, orderId, paymentId, signature);
+        if (!valid) return json({ error: 'Payment verification failed' }, 403);
+
+        // Create the event via Supabase REST (public insert policy).
+        const insertRes = await fetch(`${env.SUPABASE_URL}/rest/v1/events`, {
+          method: 'POST',
+          headers: {
+            apikey: env.SUPABASE_ANON_KEY,
+            Authorization: `Bearer ${env.SUPABASE_ANON_KEY}`,
+            'Content-Type': 'application/json',
+            Prefer: 'return=representation',
+          },
+          body: JSON.stringify({
+            name: String(eventName).slice(0, 60),
+            reveal_at: revealDate.toISOString(),
+            max_photos_limit: t.shots,
+            max_guests: t.guests,
+            plan: tier,
+            payment_id: paymentId,
+          }),
+        });
+        const rows = await insertRes.json();
+        if (!insertRes.ok || !rows?.[0]) {
+          throw new Error(rows?.message || 'Failed to create event');
+        }
+        return json({ event: rows[0] });
       } catch (err) {
         return json({ error: err.message }, 500);
       }
