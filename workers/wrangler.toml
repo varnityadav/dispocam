@@ -5,8 +5,8 @@ compatibility_date = "2024-11-01"
 [vars]
 R2_BUCKET_NAME = "once-films"
 R2_ACCOUNT_ID = "1dc58ec75d43797233d8810af4cfb477"
-# Verified MailerSend sender (on the trial domain) — emails are sent from this address
-MAILERSEND_FROM = "dispcam@test-86org8ej0pkgew13.mlsender.net"
+# Brevo sender email — verified in the Brevo dashboard
+BREVO_FROM_EMAIL = "varnityadav02001@gmail.com"
 
 # Set these secrets via `wrangler secret put` (never commit them):
 #   R2_ACCESS_KEY_ID

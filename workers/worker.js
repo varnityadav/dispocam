@@ -17,7 +17,7 @@
  *   npm install
  *   npx wrangler secret put R2_ACCESS_KEY_ID
  *   npx wrangler secret put R2_SECRET_ACCESS_KEY
- *   npx wrangler secret put MAILERSEND_API_KEY
+ *   npx wrangler secret put BREVO_API_KEY
  *   npx wrangler deploy
  */
 import { S3Client, PutObjectCommand, GetObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
@@ -129,9 +129,10 @@ async function buildPdf(photos) {
   return pdf.save();
 }
 
-/** Send the album download links via MailerSend. */
+/** Send the album download links via Brevo (free tier: 300 emails/day). */
 async function sendAlbumEmail(env, { recipientName, recipientEmail, eventName, pdfUrl, zipUrl, truncated, count }) {
-  const from = env.MAILERSEND_FROM || 'dispcam@dispcam';
+  const fromEmail = env.BREVO_FROM_EMAIL;
+  if (!fromEmail) throw new Error('BREVO_FROM_EMAIL not configured');
   const first = esc(recipientName ? recipientName.split(' ')[0] : 'there');
   const ev = esc(eventName);
   const noteStyle = 'margin:0 0 8px;font-size:13px;line-height:1.6;color:#9ca3af';
@@ -156,23 +157,24 @@ async function sendAlbumEmail(env, { recipientName, recipientEmail, eventName, p
     <p style="margin:28px 0 0;padding-top:20px;border-top:1px solid #1f1f1f;font-size:12px;color:#6b7280">Sent by DispoCam — life happens once, don't let it fade away.</p>
   </div></body></html>`;
 
-  const res = await fetch('https://api.mailersend.com/v1/email', {
+  const res = await fetch('https://api.brevo.com/v3/smtp/email', {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${env.MAILERSEND_API_KEY}`,
-      'Content-Type': 'application/json',
+      'api-key': env.BREVO_API_KEY,
+      'content-type': 'application/json',
+      accept: 'application/json',
     },
     body: JSON.stringify({
-      from: { email: from, name: 'DispoCam' },
+      sender: { name: 'DispoCam', email: fromEmail },
       to: [{ email: recipientEmail, name: recipientName || 'DispoCam guest' }],
       subject: `Your DispoCam album is ready — ${eventName}`,
-      html,
-      text: `Hi ${first},\n\n${eventName} developed — your album is ready.\n\n${pdfUrl ? '📄 PDF album: ' + pdfUrl + '\n' : ''}📦 Original-quality ZIP: ${zipUrl}\n\nDispoCam — no previews, no retakes.`,
+      htmlContent: html,
+      textContent: `Hi ${first},\n\n${eventName} developed — your album is ready.\n\n${pdfUrl ? '📄 PDF album: ' + pdfUrl + '\n' : ''}📦 Original-quality ZIP: ${zipUrl}\n\nDispoCam — no previews, no retakes.`,
     }),
   });
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`MailerSend ${res.status}: ${body.slice(0, 300)}`);
+    throw new Error(`Brevo ${res.status}: ${body.slice(0, 300)}`);
   }
 }
 
@@ -232,6 +234,11 @@ export default {
         const albumKeyBase = `once-films/_deliveries/${eventId}/${safeEmail}`;
         const markerKey = `${albumKeyBase}/sent.marker`;
 
+        // Idempotency fast path — one email per recipient per event, forever.
+        if (await objectExists(s3, env, markerKey)) {
+          return json({ delivered: true, duplicate: true });
+        }
+
         // Validate + fetch photo bytes from R2 (cap for Worker memory/CPU limits)
         const validPhotos = photos
           .filter((p) => typeof p?.storagePath === 'string' && p.storagePath.startsWith(`once-films/${eventId}/`))
@@ -260,25 +267,20 @@ export default {
         await putObject(s3, env, zipKey, zipBytes, 'application/zip');
         if (pdfBytes) await putObject(s3, env, pdfKey, pdfBytes, 'application/pdf');
 
-        // 7-day download links for the email
+        // 7-day download links for the email (PDF button omitted when the PDF
+        // couldn't be built — sendAlbumEmail handles a null pdfUrl gracefully)
         const zipUrl = await signGetUrl(s3, env, zipKey, 604800);
         const pdfUrl = pdfBytes ? await signGetUrl(s3, env, pdfKey, 604800) : null;
-        if (!pdfUrl) {
-          // PDF build failed for every image — fall back to ZIP-only email
-          await sendAlbumEmail(env, {
-            recipientName, recipientEmail: safeEmail, eventName,
-            pdfUrl: zipUrl, zipUrl, truncated, count: fetched.length,
-          });
-        } else {
-          await sendAlbumEmail(env, {
-            recipientName, recipientEmail: safeEmail, eventName,
-            pdfUrl, zipUrl, truncated, count: fetched.length,
-          });
-        }
+        await sendAlbumEmail(env, {
+          recipientName, recipientEmail: safeEmail, eventName,
+          pdfUrl, zipUrl, truncated, count: fetched.length,
+        });
 
-        // Mark delivered only after a successful send. Atomic conditional PUT:
-        // if the marker already exists (concurrent duplicate request), R2 returns
-        // 412 and we treat it as already delivered — exactly one email per recipient.
+        // Mark delivered only after a successful send. Best-effort conditional
+        // PUT as a race backstop (two simultaneous requests for the same recipient).
+        // Any failure here (e.g. R2 412 on the marker, or the AWS SDK failing to
+        // deserialize the error XML in Workers) is treated as "someone already
+        // claimed it" — the marker itself is only written by the first caller.
         try {
           await s3.send(
             new PutObjectCommand({
@@ -290,10 +292,7 @@ export default {
             })
           );
         } catch (markerErr) {
-          if (markerErr.name === 'PreconditionFailed') {
-            return json({ delivered: true, duplicate: true });
-          }
-          throw markerErr;
+          return json({ delivered: true, duplicate: true });
         }
 
         return json({ delivered: true, photos: fetched.length, truncated });
