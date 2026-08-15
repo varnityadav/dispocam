@@ -12,6 +12,7 @@ const R2_WORKER_URL = process.env.NEXT_PUBLIC_R2_WORKER_URL;
 const MEDIA_BASE_URL = process.env.NEXT_PUBLIC_MEDIA_BASE_URL || '';
 
 const NOT_CONFIGURED = 'Missing Supabase or R2 configuration. Check your .env.local and build.';
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Mechanical split-flap countdown — one digit tumbles at a time, like a
@@ -95,6 +96,8 @@ export default function DispcamApp() {
   // Guest & Real-time Lens States
   const [eventData, setEventData] = useState(null);
   const [guestName, setGuestName] = useState('');
+  const [guestEmail, setGuestEmail] = useState('');
+  const [wantEmail, setWantEmail] = useState(false); // guest opted into photo delivery by email
   const [photoCount, setPhotoCount] = useState(0);
   const [uploading, setUploading] = useState(false);
   const [timeLeft, setTimeLeft] = useState(0);
@@ -342,11 +345,20 @@ export default function DispcamApp() {
 
       // Log the shot in the photos table so it can be found at reveal time
       if (!supabase) throw new Error(NOT_CONFIGURED);
-      const { error: insertError } = await supabase.from('photos').insert({
+      const insertPayload = {
         event_id: eventData.id,
         guest_name: guestName,
+        guest_email: (wantEmail && guestEmail.trim()) ? guestEmail.trim().toLowerCase() : null,
         storage_path: storagePath
-      });
+      };
+      let { error: insertError } = await supabase.from('photos').insert(insertPayload);
+      // Graceful guard: if the guest_email column hasn't been added to the DB yet
+      // (schema.sql not re-run), retry without it so capture still works.
+      if (insertError && /guest_email/.test(insertError.message)) {
+        const { guest_email, ...minimalPayload } = insertPayload;
+        const retry = await supabase.from('photos').insert(minimalPayload);
+        insertError = retry.error;
+      }
       if (insertError) throw insertError;
 
       setPhotoCount(prev => prev + 1);
@@ -367,9 +379,10 @@ export default function DispcamApp() {
     try {
       if (!supabase) throw new Error(NOT_CONFIGURED);
 
+      // Explicit columns (never pull guest emails into the gallery view)
       const { data: rows, error } = await supabase
         .from('photos')
-        .select('*')
+        .select('id, guest_name, storage_path, created_at')
         .eq('event_id', idToFetch);
       if (error) throw error;
 
@@ -615,8 +628,46 @@ export default function DispcamApp() {
               className="w-full bg-[#121214] border border-[#2C2C2E] rounded-xl px-4 py-3 text-sm text-center text-white focus:outline-none"
               value={guestName} onChange={(e) => setGuestName(e.target.value)}
             />
+
+            {/* Optional email — lets the guest receive their shots when the film develops */}
+            <button
+              type="button"
+              onClick={() => setWantEmail(v => !v)}
+              className={`w-full flex items-center justify-center gap-2 border rounded-xl px-4 py-3 text-sm transition
+                ${wantEmail ? 'border-amber-500/50 text-amber-500 bg-amber-500/5' : 'border-[#2C2C2E] text-neutral-400 hover:border-neutral-600 hover:text-neutral-200'}`}
+            >
+              {wantEmail ? (
+                <>
+                  <span className="text-base leading-none">✕</span>
+                  <span>Hide email — shoot anonymously</span>
+                </>
+              ) : (
+                <>
+                  <span className="text-base leading-none">📬</span>
+                  <span>Get my photos when the film develops</span>
+                </>
+              )}
+            </button>
+
+            {wantEmail && (
+              <div className="space-y-2">
+                <input 
+                  type="email"
+                  placeholder="you@example.com"
+                  autoComplete="email"
+                  className="w-full bg-[#121214] border border-[#2C2C2E] rounded-xl px-4 py-3 text-sm text-center text-white focus:outline-none focus:border-amber-500/50"
+                  value={guestEmail} onChange={(e) => setGuestEmail(e.target.value)}
+                />
+                <p className="text-[11px] text-neutral-500 leading-relaxed">
+                  When the film develops we'll email your shots as a <span className="text-neutral-300">PDF album</span> plus
+                  an <span className="text-neutral-300">original-quality download</span> — no watermarks, no apps.
+                </p>
+              </div>
+            )}
+
             <button 
-              disabled={!guestName} onClick={handleEnterCamera}
+              disabled={!guestName || (wantEmail && !EMAIL_RE.test(guestEmail.trim()))}
+              onClick={handleEnterCamera}
               className="w-full bg-white text-black font-medium py-3 rounded-xl text-sm disabled:opacity-40 shadow-md"
             >
               Unlock Shutter Camera

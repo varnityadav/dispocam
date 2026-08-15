@@ -24,7 +24,12 @@ create table if not exists public.photos (
   created_at timestamptz not null default now()
 );
 
+-- Optional guest email for photo delivery (PDF album + original downloads)
+-- when the film develops. Null when the guest chose to stay anonymous.
+alter table public.photos add column if not exists guest_email text;
+
 create index if not exists photos_event_id_idx on public.photos (event_id);
+create index if not exists photos_event_email_idx on public.photos (event_id, guest_email);
 
 -- Row Level Security: mirrors the old Firestore rules (allow read/write for all).
 -- The app only ever selects and inserts, so that is all that is opened here.
