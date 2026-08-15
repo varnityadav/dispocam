@@ -283,13 +283,15 @@ export default {
     // (capacity is server-set from the tier — clients can't inflate it).
     if (url.pathname === '/verify-payment' && request.method === 'POST') {
       try {
-        const { eventName, revealAt, tier, orderId, paymentId, signature } = await request.json();
+        const { eventName, revealAt, tier, orderId, paymentId, signature, hostEmail } = await request.json();
         const t = TIERS[tier];
         if (!t || t.price <= 0) return json({ error: 'Invalid tier' }, 400);
         if (!eventName || typeof eventName !== 'string' || eventName.length > 60) {
           return json({ error: 'Invalid event name' }, 400);
         }
         if (!orderId || !paymentId || !signature) return json({ error: 'Missing payment fields' }, 400);
+        const safeHostEmail = hostEmail && String(hostEmail).trim() ? String(hostEmail).trim().toLowerCase() : null;
+        if (safeHostEmail && !EMAIL_RE.test(safeHostEmail)) return json({ error: 'Invalid hostEmail' }, 400);
 
         const revealDate = new Date(revealAt);
         if (Number.isNaN(revealDate.getTime()) || revealDate.getTime() <= Date.now()) {
@@ -333,6 +335,7 @@ export default {
             max_guests: t.guests,
             plan: tier,
             payment_id: paymentId,
+            ...(safeHostEmail ? { host_email: safeHostEmail } : {}),
           }),
         });
         const rows = await insertRes.json();

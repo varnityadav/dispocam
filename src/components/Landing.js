@@ -28,6 +28,7 @@ const REEL_FRAMES = [LOEWE.campaign1, LOEWE.amazona, LOEWE.campaign2, LOEWE.rtw]
 
 const NAV_LINKS = [
   { label: 'How it works', href: '#how-it-works' },
+  { label: 'Pricing',      href: '#pricing' },
   { label: 'Use cases',    href: '#use-cases' },
   { label: 'FAQ',          href: '#faq' },
 ];
@@ -44,6 +45,18 @@ const STEPS = [
   { n: '01', title: 'Create a film', body: 'Name your event, set the reveal timer, and cap how many shots the roll holds.' },
   { n: '02', title: 'Invite your people', body: 'Share the link or the permanent QR code. Guests join instantly — no app, no accounts.' },
   { n: '03', title: 'Capture together', body: 'Every guest shoots into the same shared roll. No previews, no retakes — it all develops at reveal.' },
+];
+
+// Pricing bundles — mirrors src/pages/index.js TIERS (keep both in sync)
+const PRICING = [
+  { id: 'free', guests: 10, shots: 10, price: 0 },
+  { id: 't50', guests: 50, shots: 25, price: 1799 },
+  { id: 't100', guests: 100, shots: 25, price: 3499 },
+  { id: 't150', guests: 150, shots: 25, price: 4799 },
+  { id: 't200', guests: 200, shots: 25, price: 5799 },
+  { id: 't250', guests: 250, shots: 25, price: 6899 },
+  { id: 't300', guests: 300, shots: 25, price: 7999 },
+  { id: 't350', guests: 350, shots: 25, price: 8999 },
 ];
 
 const FAQS = [
@@ -137,7 +150,7 @@ function MarqueeScene() {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-export default function Landing({ onCreateEvent, user, onSignIn, onSignOut }) {
+export default function Landing({ onCreateEvent, onChooseTier, user, onSignIn, onSignOut }) {
   const [scrolled, setScrolled] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
@@ -213,6 +226,11 @@ export default function Landing({ onCreateEvent, user, onSignIn, onSignOut }) {
   const handleCreate = () => {
     if (typeof window !== 'undefined') window.scrollTo(0, 0);
     onCreateEvent();
+  };
+
+  const handleChooseTier = (id) => {
+    if (typeof window !== 'undefined') window.scrollTo(0, 0);
+    onChooseTier?.(id);
   };
 
   return (
@@ -558,6 +576,59 @@ export default function Landing({ onCreateEvent, user, onSignIn, onSignOut }) {
         </div>
       </section>
 
+      {/* ── PRICING — every bundle has its own button ───────────────────── */}
+      <section id="pricing" className="py-24 md:py-32 border-b border-[#1C1C1E]">
+        <div className="max-w-6xl mx-auto px-6">
+          <p data-reveal-rise className="text-[11px] uppercase tracking-[0.3em] text-amber-500/90 mb-4 font-medium">Pricing</p>
+          <h2 data-reveal-rise data-delay="80" className="font-display text-4xl md:text-6xl tracking-tight text-white">
+            One roll.{' '}
+            <span className="font-serif-accent text-amber-400/90">Priced for the size of your day.</span>
+          </h2>
+          <p data-reveal-rise data-delay="160" className="mt-5 text-neutral-400 max-w-xl text-sm md:text-base leading-relaxed">
+            Events up to 10 guests are free forever. Beyond that everyone gets 25 shots each — and the bigger
+            the event, the less each guest costs you.
+          </p>
+
+          <div className="mt-14 grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            {PRICING.map((p, i) => (
+              <div
+                key={p.id}
+                data-reveal-rise
+                data-delay={i * 80}
+                className={`relative rounded-2xl border p-6 flex flex-col transition-colors duration-500 ${p.price === 0 ? 'border-emerald-500/40 bg-emerald-500/[0.04]' : 'border-[#1C1C1E] bg-[#121214] hover:border-amber-500/40'}`}
+              >
+                {p.price === 0 && (
+                  <span className="absolute -top-2.5 left-5 text-[10px] uppercase tracking-widest bg-emerald-500 text-black font-bold px-2.5 py-1 rounded-full">
+                    Free forever
+                  </span>
+                )}
+                <p className="font-display text-2xl text-white">{p.guests} guests</p>
+                <p className="mt-1 text-xs text-neutral-500">{p.shots} shots per guest</p>
+                <div className="mt-5 flex items-baseline gap-1">
+                  <p className={`font-display text-3xl ${p.price === 0 ? 'text-emerald-400' : 'text-amber-400'}`}>
+                    {p.price === 0 ? '₹0' : `₹${p.price.toLocaleString('en-IN')}`}
+                  </p>
+                  {p.price > 0 && <p className="text-[11px] text-neutral-500">/event</p>}
+                </div>
+                <p className="mt-1 text-[11px] text-neutral-600">
+                  {p.price === 0 ? '10 shots each · ₹0 forever' : `≈ ₹${Math.round(p.price / p.guests)} per guest`}
+                </p>
+                <button
+                  onClick={() => handleChooseTier(p.id)}
+                  className={`mt-6 w-full text-sm font-semibold py-3 rounded-full transition-all active:scale-[0.98] ${p.price === 0 ? 'bg-emerald-500 text-black hover:bg-emerald-400 hover:scale-[1.02]' : 'bg-white text-black hover:bg-amber-400 hover:scale-[1.02]'}`}
+                >
+                  {p.price === 0 ? 'Start free' : `Choose ${p.guests} guests`}
+                </button>
+              </div>
+            ))}
+          </div>
+          <p data-reveal-rise className="mt-8 text-[11px] text-neutral-600 text-center max-w-2xl mx-auto leading-relaxed">
+            Every plan includes the permanent QR, the shared film roll, album emails, and the full gallery.
+            Prices in INR — paid once per event via UPI or card.
+          </p>
+        </div>
+      </section>
+
       {/* ── FAQ ─────────────────────────────────────────────────────────── */}
       <section id="faq" className="py-24 md:py-32">
         <div className="max-w-3xl mx-auto px-6">
@@ -626,6 +697,7 @@ export default function Landing({ onCreateEvent, user, onSignIn, onSignOut }) {
             <div>
               <p className="text-[11px] uppercase tracking-[0.25em] text-neutral-600 mb-4">Product</p>
               <button onClick={() => scrollTo('#how-it-works')} className="block text-sm text-neutral-400 hover:text-white py-1 transition-colors">How it works</button>
+              <button onClick={() => scrollTo('#pricing')} className="block text-sm text-neutral-400 hover:text-white py-1 transition-colors">Pricing</button>
               <button onClick={() => scrollTo('#faq')} className="block text-sm text-neutral-400 hover:text-white py-1 transition-colors">FAQ</button>
             </div>
             <div>

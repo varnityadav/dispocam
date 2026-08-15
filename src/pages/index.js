@@ -113,9 +113,15 @@ export default function DispcamApp() {
   const [eventName, setEventName] = useState('');
   const [duration, setDuration] = useState('2');
   const [selectedTier, setSelectedTier] = useState('free');
+  const [hostEmail, setHostEmail] = useState(''); // where the host's full album goes
   const [paying, setPaying] = useState(false);
   const [payError, setPayError] = useState('');
   const [generatedLink, setGeneratedLink] = useState('');
+
+  // Gallery delivery actions (guest "get my album" + host "full film")
+  const [galleryEmailOpen, setGalleryEmailOpen] = useState(false);
+  const [galleryEmail, setGalleryEmail] = useState('');
+  const [galleryEmailMsg, setGalleryEmailMsg] = useState('');
   const [qrDataUrl, setQrDataUrl] = useState('');
 
   // Guest & Real-time Lens States
@@ -167,6 +173,11 @@ export default function DispcamApp() {
     });
     return () => authSub?.subscription?.unsubscribe();
   }, []);
+
+  // Prefill the host album email from the signed-in Google account (editable)
+  useEffect(() => {
+    if (user?.email && !hostEmail) setHostEmail(user.email);
+  }, [user]);
 
   const signInWithGoogle = async () => {
     if (!supabase) { alert(NOT_CONFIGURED); return; }
@@ -311,6 +322,11 @@ export default function DispcamApp() {
     const revealAt = new Date();
     revealAt.setHours(revealAt.getHours() + parseInt(duration));
     const tier = TIERS[selectedTier];
+    const albumEmail = hostEmail.trim() ? hostEmail.trim().toLowerCase() : null;
+    if (albumEmail && !EMAIL_RE.test(albumEmail)) {
+      setPayError('Please enter a valid album email');
+      return;
+    }
 
     try {
       if (!supabase) throw new Error(NOT_CONFIGURED);
@@ -324,16 +340,22 @@ export default function DispcamApp() {
             reveal_at: revealAt.toISOString(),
             max_photos_limit: tier.shots,
             max_guests: tier.guests,
-            plan: 'free'
+            plan: 'free',
+            host_email: albumEmail
           })
           .select('id')
           .single();
         // Graceful guard: if the paid-tier columns aren't in the DB yet
         // (schema.sql not re-run), retry with the original shape.
-        if (error && /max_guests|plan/.test(error.message)) {
+        if (error && /max_guests|plan|host_email/.test(error.message)) {
           const retry = await supabase
             .from('events')
-            .insert({ name: eventName, reveal_at: revealAt.toISOString(), max_photos_limit: tier.shots })
+            .insert({
+              name: eventName,
+              reveal_at: revealAt.toISOString(),
+              max_photos_limit: tier.shots,
+              ...(albumEmail ? { host_email: albumEmail } : {})
+            })
             .select('id')
             .single();
           data = retry.data;
@@ -381,6 +403,7 @@ export default function DispcamApp() {
                 orderId: res.razorpay_order_id,
                 paymentId: res.razorpay_payment_id,
                 signature: res.razorpay_signature,
+                hostEmail: albumEmail,
               }),
             });
             const v = await vRes.json();
@@ -520,22 +543,48 @@ export default function DispcamApp() {
     }
   };
 
-  // When the film develops, email every guest who opted in their own album,
-  // plus the signed-in host the full album. Idempotent on the Worker (R2 marker
-  // means each recipient gets exactly one email per event); deliveredSetRef skips
-  // recipients already attempted in this session.
+  // Deliver ONE recipient's album (guest = their shots, host = the full film).
+  // The Worker's R2 marker guarantees one email per recipient per event.
+  const deliverRecipient = async (evt, { email, kind, recipientName, photos }) => {
+    if (!R2_WORKER_URL) return { ok: false, error: NOT_CONFIGURED };
+    const key = `${evt.id}|${email}`;
+    if (deliveredSetRef.current.has(key)) return { ok: true, duplicate: true };
+    try {
+      const res = await fetch(`${R2_WORKER_URL}/deliver`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          eventId: evt.id,
+          eventName: evt.name,
+          recipientName,
+          recipientEmail: email,
+          kind,
+          photos,
+        }),
+      });
+      const j = await res.json();
+      if (!res.ok || j.error) throw new Error(j.error || ('HTTP ' + res.status));
+      deliveredSetRef.current.add(key);
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  };
+
+  // When the film develops, auto-email every guest who opted in their own album,
+  // plus the host (event host_email, else the signed-in user) the full film.
   const deliverAlbums = async (photoList, evt) => {
     if (!R2_WORKER_URL || !photoList || photoList.length === 0) return;
 
-    // Guests: unique opted-in emails → their own photos
     const guestEmails = [...new Set(
       photoList
         .map((p) => (p.guest_email || '').trim().toLowerCase())
         .filter((e) => EMAIL_RE.test(e))
     )];
+    const hostEmail =
+      (evt?.host_email && EMAIL_RE.test(evt.host_email) ? evt.host_email.trim().toLowerCase() : null) ||
+      (user?.email ? user.email.trim().toLowerCase() : null);
 
-    // Host: signed-in user gets the full album
-    const hostEmail = user?.email ? user.email.trim().toLowerCase() : null;
     const tasks = [];
     for (const email of guestEmails) {
       if (hostEmail && email === hostEmail) continue; // host album covers them
@@ -552,40 +601,50 @@ export default function DispcamApp() {
         photos: photoList.map((p) => ({ storagePath: p.storage_path, guestName: p.guest_name })),
       });
     }
-    // Skip recipients already handled in this session
+
     const fresh = tasks.filter((t) => !deliveredSetRef.current.has(`${evt.id}|${t.email}`));
     if (fresh.length === 0) return;
 
-    const tasksToRun = fresh;
-    const guestTaskCount = tasks.length;
-
     setDeliveryStatus('sending');
-    setDeliveryInfo({ done: 0, total: guestTaskCount, failed: 0 });
-
+    setDeliveryInfo({ done: 0, total: fresh.length, failed: 0 });
     let failed = 0;
-    for (const t of tasksToRun) {
-      try {
-        const res = await fetch(`${R2_WORKER_URL}/deliver`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            eventId: evt.id,
-            eventName: evt.name,
-            recipientName: t.recipientName,
-            recipientEmail: t.email,
-            kind: t.kind,
-            photos: t.photos,
-          }),
-        });
-        const j = await res.json();
-        if (!res.ok || j.error) throw new Error(j.error || ('HTTP ' + res.status));
-        deliveredSetRef.current.add(`${evt.id}|${t.email}`); // delivered or duplicate
-      } catch (e) {
-        failed++;
-      }
+    for (const t of fresh) {
+      const r = await deliverRecipient(evt, t);
+      if (!r.ok) failed++;
       setDeliveryInfo((prev) => ({ ...prev, done: prev.done + 1, failed }));
     }
     setDeliveryStatus(failed > 0 ? 'partial' : 'sent');
+  };
+
+  // Manual gallery actions — every guest can pull their own album, hosts the full film
+  const handleGalleryGuestEmail = async (e) => {
+    e.preventDefault();
+    const email = galleryEmail.trim().toLowerCase();
+    if (!EMAIL_RE.test(email)) { setGalleryEmailMsg('Please enter a valid email'); return; }
+    const mine = photos
+      .filter((p) => (p.guest_email || '').toLowerCase() === email)
+      .map((p) => ({ storagePath: p.storage_path, guestName: p.guest_name }));
+    if (mine.length === 0) { setGalleryEmailMsg('No photos are linked to that email — it wasn’t saved when you shot.'); return; }
+    setGalleryEmailMsg('Developing your album…');
+    const r = await deliverRecipient(eventData, { email, kind: 'guest', recipientName: mine[0].guestName, photos: mine });
+    setGalleryEmailMsg(r.ok ? (r.duplicate ? 'Album already sent to that email.' : 'Album sent — check your inbox! 📬') : ('Failed: ' + r.error));
+  };
+
+  const handleHostAlbumEmail = async () => {
+    const email = (
+      eventData?.host_email && EMAIL_RE.test(eventData.host_email)
+        ? eventData.host_email
+        : (user?.email || '')
+    ).trim().toLowerCase();
+    if (!EMAIL_RE.test(email)) { setGalleryEmailMsg('No host email on file — add one when creating the event, or sign in.'); return; }
+    setGalleryEmailMsg('Developing the full film…');
+    const r = await deliverRecipient(eventData, {
+      email,
+      kind: 'host',
+      recipientName: user?.user_metadata?.full_name || 'Host',
+      photos: photos.map((p) => ({ storagePath: p.storage_path, guestName: p.guest_name })),
+    });
+    setGalleryEmailMsg(r.ok ? (r.duplicate ? 'Full album already sent to that email.' : 'Full album sent — check your inbox! 📬') : ('Failed: ' + r.error));
   };
 
   // Deliver albums once the gallery is on screen. Re-fires when the signed-in
@@ -650,11 +709,17 @@ export default function DispcamApp() {
     }
   };
 
+  // Landing pricing buttons jump straight to the host form with the tier preselected
+  const handleChooseTier = (id) => {
+    setSelectedTier(TIERS[id] ? id : 'free');
+    handleEnterApp();
+  };
+
   return (
     <>
       {/* LANDING PAGE — the new home (skipped when arriving via a ?room= link) */}
       {view === 'landing' && (
-        <Landing onCreateEvent={handleEnterApp} user={user} onSignIn={signInWithGoogle} onSignOut={handleSignOut} />
+        <Landing onCreateEvent={handleEnterApp} onChooseTier={handleChooseTier} user={user} onSignIn={signInWithGoogle} onSignOut={handleSignOut} />
       )}
 
       {/* APP VIEWS */}
@@ -738,6 +803,18 @@ export default function DispcamApp() {
                   className="w-full bg-[#1A1A1E] border border-[#2C2C2E] rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-neutral-500 transition"
                   value={eventName} onChange={(e) => setEventName(e.target.value)}
                 />
+              </div>
+              <div>
+                <label className="block text-xs uppercase tracking-wider text-neutral-400 mb-2 font-medium">
+                  Album Email <span className="normal-case font-normal text-neutral-600">(full film goes here)</span>
+                </label>
+                <input 
+                  type="email"
+                  placeholder={user ? user.email : 'you@example.com — where your album lands'}
+                  className="w-full bg-[#1A1A1E] border border-[#2C2C2E] rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-neutral-500 transition"
+                  value={hostEmail} onChange={(e) => setHostEmail(e.target.value)}
+                />
+                <p className="mt-1.5 text-[11px] text-neutral-500">📬 When the film develops, the full album is emailed here as a PDF + original-quality ZIP.</p>
               </div>
               <div>
                 <label className="block text-xs uppercase tracking-wider text-neutral-400 mb-2 font-medium">Timer Lock</label>
@@ -986,6 +1063,41 @@ export default function DispcamApp() {
                   </button>
                 )}
               </div>
+            )}
+
+            {/* Manual album actions — every guest + host has a button */}
+            <div className="flex flex-wrap justify-center gap-2 pt-3">
+              {(eventData.host_email || user?.email) && (
+                <button
+                  onClick={handleHostAlbumEmail}
+                  className="text-xs text-amber-300 bg-[#1A1A1E] border border-[#2C2C2E] rounded-full px-4 py-2 hover:border-amber-500/50 hover:text-amber-200 transition"
+                >
+                  📧 Email me the full film
+                </button>
+              )}
+              <button
+                onClick={() => { setGalleryEmailOpen(!galleryEmailOpen); setGalleryEmailMsg(''); }}
+                className="text-xs text-neutral-300 bg-[#1A1A1E] border border-[#2C2C2E] rounded-full px-4 py-2 hover:border-amber-500/50 hover:text-white transition"
+              >
+                📬 Get my album by email
+              </button>
+            </div>
+            {galleryEmailOpen && (
+              <form onSubmit={handleGalleryGuestEmail} className="flex flex-col items-center gap-2 pt-2">
+                <input
+                  type="email"
+                  placeholder="you@example.com"
+                  value={galleryEmail}
+                  onChange={(e) => setGalleryEmail(e.target.value)}
+                  className="w-64 bg-[#121214] border border-[#2C2C2E] rounded-xl px-4 py-2 text-sm text-center text-white focus:outline-none focus:border-amber-500/50"
+                />
+                <button type="submit" className="text-xs text-black bg-amber-400 rounded-full px-5 py-2 font-semibold hover:bg-amber-300 transition">
+                  Send my album
+                </button>
+              </form>
+            )}
+            {galleryEmailMsg && (
+              <p className="pt-2 text-xs text-amber-300/90">{galleryEmailMsg}</p>
             )}
           </header>
 
