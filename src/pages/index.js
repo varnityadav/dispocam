@@ -107,9 +107,15 @@ export default function DispcamApp() {
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const rollTimerRef = useRef(null);
+  // Recipients already attempted this session (the Worker's R2 marker handles cross-session dedupe)
+  const deliveredSetRef = useRef(new Set());
 
   // Unlocked Developed Gallery State
   const [photos, setPhotos] = useState([]);
+
+  // Photo delivery status ('idle' | 'sending' | 'sent' | 'partial')
+  const [deliveryStatus, setDeliveryStatus] = useState('idle');
+  const [deliveryInfo, setDeliveryInfo] = useState({ done: 0, total: 0, failed: 0 });
 
   // Google sign-in session (Supabase Auth)
   const [user, setUser] = useState(null);
@@ -379,10 +385,10 @@ export default function DispcamApp() {
     try {
       if (!supabase) throw new Error(NOT_CONFIGURED);
 
-      // Explicit columns (never pull guest emails into the gallery view)
+      // guest_email is fetched for album delivery (never rendered in the gallery)
       const { data: rows, error } = await supabase
         .from('photos')
-        .select('id, guest_name, storage_path, created_at')
+        .select('id, guest_name, guest_email, storage_path, created_at')
         .eq('event_id', idToFetch);
       if (error) throw error;
 
@@ -411,6 +417,89 @@ export default function DispcamApp() {
       alert("Failed to load gallery: " + e.message);
     }
   };
+
+  // When the film develops, email every guest who opted in their own album,
+  // plus the signed-in host the full album. Idempotent on the Worker (R2 marker
+  // means each recipient gets exactly one email per event); deliveredSetRef skips
+  // recipients already attempted in this session.
+  const deliverAlbums = async (photoList, evt) => {
+    if (!R2_WORKER_URL || !photoList || photoList.length === 0) return;
+
+    // Guests: unique opted-in emails → their own photos
+    const guestEmails = [...new Set(
+      photoList
+        .map((p) => (p.guest_email || '').trim().toLowerCase())
+        .filter((e) => EMAIL_RE.test(e))
+    )];
+
+    // Host: signed-in user gets the full album
+    const hostEmail = user?.email ? user.email.trim().toLowerCase() : null;
+    const tasks = [];
+    for (const email of guestEmails) {
+      if (hostEmail && email === hostEmail) continue; // host album covers them
+      const mine = photoList
+        .filter((p) => (p.guest_email || '').trim().toLowerCase() === email)
+        .map((p) => ({ storagePath: p.storage_path, guestName: p.guest_name }));
+      if (mine.length) tasks.push({ email, kind: 'guest', recipientName: mine[0].guestName, photos: mine });
+    }
+    if (hostEmail) {
+      tasks.push({
+        email: hostEmail,
+        kind: 'host',
+        recipientName: user?.user_metadata?.full_name || 'Host',
+        photos: photoList.map((p) => ({ storagePath: p.storage_path, guestName: p.guest_name })),
+      });
+    }
+    // Skip recipients already handled in this session
+    const fresh = tasks.filter((t) => !deliveredSetRef.current.has(`${evt.id}|${t.email}`));
+    if (fresh.length === 0) return;
+
+    const tasksToRun = fresh;
+    const guestTaskCount = tasks.length;
+
+    setDeliveryStatus('sending');
+    setDeliveryInfo({ done: 0, total: guestTaskCount, failed: 0 });
+
+    let failed = 0;
+    for (const t of tasksToRun) {
+      try {
+        const res = await fetch(`${R2_WORKER_URL}/deliver`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            eventId: evt.id,
+            eventName: evt.name,
+            recipientName: t.recipientName,
+            recipientEmail: t.email,
+            kind: t.kind,
+            photos: t.photos,
+          }),
+        });
+        const j = await res.json();
+        if (!res.ok || j.error) throw new Error(j.error || ('HTTP ' + res.status));
+        deliveredSetRef.current.add(`${evt.id}|${t.email}`); // delivered or duplicate
+      } catch (e) {
+        failed++;
+      }
+      setDeliveryInfo((prev) => ({ ...prev, done: prev.done + 1, failed }));
+    }
+    setDeliveryStatus(failed > 0 ? 'partial' : 'sent');
+  };
+
+  // Deliver albums once the gallery is on screen. Re-fires when the signed-in
+  // user resolves late (async session restore) so the host album is never skipped.
+  useEffect(() => {
+    if (
+      view === 'gallery' &&
+      eventData &&
+      photos.length > 0 &&
+      deliveryStatus !== 'sending' &&
+      deliveryStatus !== 'partial'
+    ) {
+      deliverAlbums(photos, eventData);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, eventData, photos, deliveryStatus, user]);
 
   const downloadQr = () => {
     if (!qrDataUrl) return;
@@ -752,6 +841,29 @@ export default function DispcamApp() {
             <span className="text-xs uppercase tracking-widest text-amber-500 font-semibold bg-amber-500/10 px-3 py-1 rounded-full">Roll Fully Developed</span>
             <h2 className="text-3xl font-light text-white tracking-tight pt-2">{eventData.name}</h2>
             <p className="text-xs text-neutral-500 tracking-wide">{photos.length} raw exposures unspooled.</p>
+
+            {deliveryStatus !== 'idle' && (
+              <div className="flex justify-center pt-2">
+                {deliveryStatus === 'sending' && (
+                  <p className="text-xs text-amber-500/90 bg-amber-500/5 border border-amber-500/20 rounded-full px-4 py-2">
+                    📬 Developing albums… {deliveryInfo.done}/{deliveryInfo.total}
+                  </p>
+                )}
+                {deliveryStatus === 'sent' && (
+                  <p className="text-xs text-emerald-400/90 bg-emerald-500/5 border border-emerald-500/20 rounded-full px-4 py-2">
+                    📬 Albums emailed — every guest who opted in got their photos, and you got the full film.
+                  </p>
+                )}
+                {deliveryStatus === 'partial' && (
+                  <button
+                    onClick={() => deliverAlbums(photos, eventData)}
+                    className="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/30 rounded-full px-4 py-2 hover:bg-amber-500/20 transition"
+                  >
+                    ⚠️ {deliveryInfo.failed} album(s) failed — tap to retry
+                  </button>
+                )}
+              </div>
+            )}
           </header>
 
           {photos.length === 0 ? (
