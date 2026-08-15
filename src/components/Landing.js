@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import QRCode from 'qrcode';
+import { TIER_LIST as PRICING } from '../lib/pricing';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Photography:
@@ -47,17 +48,9 @@ const STEPS = [
   { n: '03', title: 'Capture together', body: 'Every guest shoots into the same shared roll. No previews, no retakes — it all develops at reveal.' },
 ];
 
-// Pricing bundles — mirrors src/pages/index.js TIERS (keep both in sync)
-const PRICING = [
-  { id: 'free', guests: 10, shots: 10, price: 0 },
-  { id: 't50', guests: 50, shots: 25, price: 1799 },
-  { id: 't100', guests: 100, shots: 25, price: 3499 },
-  { id: 't150', guests: 150, shots: 25, price: 4799 },
-  { id: 't200', guests: 200, shots: 25, price: 5799 },
-  { id: 't250', guests: 250, shots: 25, price: 6899 },
-  { id: 't300', guests: 300, shots: 25, price: 7999 },
-  { id: 't350', guests: 350, shots: 25, price: 8999 },
-];
+// Pricing bundles now come from src/lib/pricing.js (single source of truth,
+// shared with the host form) — prices can't drift between the landing page
+// and the app anymore.
 
 const FAQS = [
   { q: 'How does DispoCam work?', a: 'You create an event and get a link plus a permanent QR code. Guests open it, add their name, and shoot into a shared film roll with a fixed number of shots. When the reveal timer ends, the gallery develops for everyone.' },

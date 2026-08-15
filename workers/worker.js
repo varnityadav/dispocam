@@ -320,7 +320,23 @@ export default {
         }
 
         // Create the event via Supabase REST (public insert policy).
-        const insertRes = await fetch(`${env.SUPABASE_URL}/rest/v1/events`, {
+        // Graceful guard: if the DB hasn't been updated with the host_email
+        // column yet, retry WITHOUT it (keep payment_id/max_guests/plan —
+        // dropping those would break idempotency and capacity enforcement).
+        const buildInsert = (withHostEmail) => {
+          const payload = {
+            name: String(eventName).slice(0, 60),
+            reveal_at: revealDate.toISOString(),
+            max_photos_limit: t.shots,
+            max_guests: t.guests,
+            plan: tier,
+            payment_id: paymentId,
+          };
+          if (withHostEmail && safeHostEmail) payload.host_email = safeHostEmail;
+          return payload;
+        };
+
+        let insertRes = await fetch(`${env.SUPABASE_URL}/rest/v1/events`, {
           method: 'POST',
           headers: {
             apikey: env.SUPABASE_ANON_KEY,
@@ -328,17 +344,22 @@ export default {
             'Content-Type': 'application/json',
             Prefer: 'return=representation',
           },
-          body: JSON.stringify({
-            name: String(eventName).slice(0, 60),
-            reveal_at: revealDate.toISOString(),
-            max_photos_limit: t.shots,
-            max_guests: t.guests,
-            plan: tier,
-            payment_id: paymentId,
-            ...(safeHostEmail ? { host_email: safeHostEmail } : {}),
-          }),
+          body: JSON.stringify(buildInsert(true)),
         });
-        const rows = await insertRes.json();
+        let rows = await insertRes.json();
+        if ((!insertRes.ok || !rows?.[0]) && /host_email/.test(rows?.message || '')) {
+          insertRes = await fetch(`${env.SUPABASE_URL}/rest/v1/events`, {
+            method: 'POST',
+            headers: {
+              apikey: env.SUPABASE_ANON_KEY,
+              Authorization: `Bearer ${env.SUPABASE_ANON_KEY}`,
+              'Content-Type': 'application/json',
+              Prefer: 'return=representation',
+            },
+            body: JSON.stringify(buildInsert(false)),
+          });
+          rows = await insertRes.json();
+        }
         if (!insertRes.ok || !rows?.[0]) {
           throw new Error(rows?.message || 'Failed to create event');
         }

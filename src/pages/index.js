@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, Fragment } from 'react';
 import QRCode from 'qrcode';
 import { supabase } from '../lib/supabase';
 import Landing from '../components/Landing';
+import { TIERS, TIER_LIST } from '../lib/pricing';
 
 // Cloudflare R2 upload worker — signs presigned URLs for direct browser uploads.
 // Set via NEXT_PUBLIC_R2_WORKER_URL in .env.local (deploy from /workers).
@@ -14,18 +15,8 @@ const MEDIA_BASE_URL = process.env.NEXT_PUBLIC_MEDIA_BASE_URL || '';
 const NOT_CONFIGURED = 'Missing Supabase or R2 configuration. Check your .env.local and build.';
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-// Event pricing tiers — free forever up to 10 guests; paid capacity = 25 shots/guest.
-const TIERS = {
-  free: { guests: 10, shots: 10, price: 0 },
-  t50: { guests: 50, shots: 25, price: 1799 },
-  t100: { guests: 100, shots: 25, price: 3499 },
-  t150: { guests: 150, shots: 25, price: 4799 },
-  t200: { guests: 200, shots: 25, price: 5799 },
-  t250: { guests: 250, shots: 25, price: 6899 },
-  t300: { guests: 300, shots: 25, price: 7999 },
-  t350: { guests: 350, shots: 25, price: 8999 },
-};
-const TIER_LIST = Object.entries(TIERS).map(([id, t]) => ({ id, ...t }));
+// Pricing tiers come from src/lib/pricing.js (single source of truth).
+// ⚠️ workers/worker.js mirrors them for server-side amounts — keep in sync.
 
 // Inject Razorpay's checkout script on demand (static-export safe).
 const loadRazorpayScript = () => new Promise((resolve) => {
@@ -603,7 +594,12 @@ export default function DispcamApp() {
     }
 
     const fresh = tasks.filter((t) => !deliveredSetRef.current.has(`${evt.id}|${t.email}`));
-    if (fresh.length === 0) return;
+    if (fresh.length === 0) {
+      // Every recipient was already attempted this session (e.g. gallery revisit
+      // via the Back button) — show the sent confirmation instead of going silent.
+      if (tasks.length > 0) setDeliveryStatus('sent');
+      return;
+    }
 
     setDeliveryStatus('sending');
     setDeliveryInfo({ done: 0, total: fresh.length, failed: 0 });
