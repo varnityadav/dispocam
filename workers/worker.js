@@ -36,6 +36,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 // Pricing tiers — free forever up to 10 guests, then paid capacity with 25 shots
 // per guest at a declining per-guest price (approved by the founder).
+// ⚠️ Mirrored in src/pages/index.js (TIERS) — keep both in sync when pricing changes.
 const TIERS = {
   free: { guests: 10, shots: 10, price: 0 },
   t50: { guests: 50, shots: 25, price: 1799 },
@@ -60,6 +61,16 @@ async function verifyRazorpaySignature(secret, orderId, paymentId, signature) {
   const sig = await crypto.subtle.sign('HMAC', key, data);
   const hex = [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, '0')).join('');
   return hex === signature;
+}
+
+async function razorpayGet(env, path) {
+  const basic = btoa(`${env.RAZORPAY_KEY_ID}:${env.RAZORPAY_KEY_SECRET}`);
+  const res = await fetch(`https://api.razorpay.com/v1${path}`, {
+    headers: { Authorization: `Basic ${basic}` },
+  });
+  const body = await res.json();
+  if (!res.ok) throw new Error(body?.error?.description || 'Razorpay request failed');
+  return body;
 }
 
 async function createRazorpayOrder(env, { tier, eventName }) {
@@ -287,6 +298,24 @@ export default {
 
         const valid = await verifyRazorpaySignature(env.RAZORPAY_KEY_SECRET, orderId, paymentId, signature);
         if (!valid) return json({ error: 'Payment verification failed' }, 403);
+
+        // Defense-in-depth: confirm the Razorpay order's amount matches the tier
+        // and that it was actually paid in full before granting the event.
+        const order = await razorpayGet(env, `/orders/${orderId}`);
+        if (order.amount !== t.price * 100 || (order.amount_paid || 0) < order.amount) {
+          return json({ error: 'Order not fully paid' }, 403);
+        }
+
+        // Idempotency: one event per payment — reuse an existing one if the
+        // client retried after a network hiccup.
+        const existingRes = await fetch(
+          `${env.SUPABASE_URL}/rest/v1/events?select=id&payment_id=eq.${encodeURIComponent(paymentId)}`,
+          { headers: { apikey: env.SUPABASE_ANON_KEY, Authorization: `Bearer ${env.SUPABASE_ANON_KEY}` } }
+        );
+        const existing = await existingRes.json();
+        if (existingRes.ok && existing?.[0]?.id) {
+          return json({ event: existing[0] });
+        }
 
         // Create the event via Supabase REST (public insert policy).
         const insertRes = await fetch(`${env.SUPABASE_URL}/rest/v1/events`, {

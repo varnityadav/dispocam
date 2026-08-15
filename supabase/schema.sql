@@ -21,6 +21,9 @@ alter table public.events add column if not exists max_guests integer default 10
 alter table public.events add column if not exists plan text default 'free';
 alter table public.events add column if not exists payment_id text;
 
+-- One event per Razorpay payment (idempotency at the DB level)
+create unique index if not exists events_payment_id_unique on public.events (payment_id) where payment_id is not null;
+
 -- Photos: one row per captured shot, pointing at its R2 object key
 create table if not exists public.photos (
   id uuid primary key default gen_random_uuid(),
