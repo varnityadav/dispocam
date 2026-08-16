@@ -254,6 +254,11 @@ export default function DispcamApp() {
   const flashRef = useRef(false);
   // Recipients already attempted this session (the Worker's R2 marker handles cross-session dedupe)
   const deliveredSetRef = useRef(new Set());
+  // Set when a host tries to create an event before signing in — the create
+  // re-fires automatically the moment auth completes (phone OTP) or the form is
+  // restored after the Google redirect returns.
+  const pendingCreateRef = useRef(false);
+  const handleCreateEventRef = useRef(null);
 
   // Unlocked Developed Gallery State
   const [photos, setPhotos] = useState([]);
@@ -270,6 +275,10 @@ export default function DispcamApp() {
   const [eventsList, setEventsList] = useState(null);
   const [eventsBusy, setEventsBusy] = useState(false);
   const [eventsError, setEventsError] = useState('');
+  // Host controls — the signed-in host's own rolls
+  const [myEvents, setMyEvents] = useState(null);
+  const [myEventsBusy, setMyEventsBusy] = useState(false);
+  const [revealBusyId, setRevealBusyId] = useState('');
   const [authModal, setAuthModal] = useState('closed'); // 'closed' | 'phone'
   const [phoneStep, setPhoneStep] = useState('input'); // 'input' | 'otp'
   const [authPhone, setAuthPhone] = useState('');
@@ -304,6 +313,44 @@ export default function DispcamApp() {
     if (user?.email && !hostEmail) setHostEmail(user.email);
   }, [user]);
 
+  // After a host signs in mid-create: finish the event (phone OTP, in-session)
+  // or restore the form they filled in (Google redirect — sessionStorage survives
+  // the full-page round-trip).
+  useEffect(() => {
+    if (!user) return;
+    const pendingRaw =
+      typeof window !== 'undefined' ? window.sessionStorage.getItem('dispocam_pending_create') : null;
+    if (typeof window !== 'undefined' && pendingRaw) window.sessionStorage.removeItem('dispocam_pending_create');
+
+    if (pendingCreateRef.current) {
+      pendingCreateRef.current = false;
+      handleCreateEventRef.current?.({ preventDefault: () => {} });
+      return;
+    }
+    if (pendingRaw) {
+      try {
+        const pending = JSON.parse(pendingRaw);
+        if (pending.eventName) {
+          setEventName(pending.eventName);
+          setDuration(pending.duration || '2');
+          setSelectedTier(pending.selectedTier || 'free');
+          setHostEmail(pending.hostEmail || user.email || '');
+          setView('host');
+          window.history.pushState({ dispcam: true, view: 'host' }, '');
+        }
+      } catch (e) { /* corrupt flag — just drop it */ }
+    }
+  }, [user]);
+
+  // PostHog SPA pageviews — fire $pageview on mount and on every view change.
+  // (The snippet in _document.js is initialized with capture_pageview:false so
+  // there's exactly one source of truth for pageviews.)
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.posthog) {
+      window.posthog.capture('$pageview');
+    }
+  }, [view]);
+
   const signInWithGoogle = async () => {
     if (!supabase) { alert(NOT_CONFIGURED); return; }
     const { error } = await supabase.auth.signInWithOAuth({
@@ -331,6 +378,9 @@ export default function DispcamApp() {
   const closeAuthModal = () => {
     setAuthModal('closed');
     setAuthMsg('');
+    // Don't auto-create later if the host abandoned signing in mid-create
+    pendingCreateRef.current = false;
+    if (typeof window !== 'undefined') window.sessionStorage.removeItem('dispocam_pending_create');
   };
 
   const sendPhoneOtp = async (e) => {
@@ -540,6 +590,19 @@ export default function DispcamApp() {
     setQrDataUrl('');
     setPayError('');
 
+    // Creating an event now requires sign-in (RLS is owner-scoped). If the host
+    // isn't signed in yet, park the form and open auth — Google continues after
+    // the redirect, phone OTP continues automatically in-session.
+    if (!user) {
+      pendingCreateRef.current = true;
+      window.sessionStorage.setItem('dispocam_pending_create', JSON.stringify({
+        eventName, duration, selectedTier, hostEmail,
+      }));
+      openPhoneAuth();
+      setAuthMsg('Sign in to create your film roll — Google takes 10 seconds.');
+      return;
+    }
+
     const revealAt = new Date();
     revealAt.setHours(revealAt.getHours() + parseInt(duration));
     const tier = TIERS[selectedTier];
@@ -562,13 +625,14 @@ export default function DispcamApp() {
             max_photos_limit: tier.shots,
             max_guests: tier.guests,
             plan: 'free',
-            host_email: albumEmail
+            host_email: albumEmail,
+            owner_id: user.id
           })
           .select('id')
           .single();
-        // Graceful guard: if the paid-tier columns aren't in the DB yet
-        // (schema.sql not re-run), retry with the original shape.
-        if (error && /max_guests|plan|host_email/.test(error.message)) {
+        // Graceful guard: if the newer columns aren't in the DB yet
+        // (schema.sql / rls_hardening.sql not re-run), retry with the old shape.
+        if (error && /owner_id|max_guests|plan|host_email/.test(error.message)) {
           const retry = await supabase
             .from('events')
             .insert({
@@ -625,6 +689,7 @@ export default function DispcamApp() {
                 paymentId: res.razorpay_payment_id,
                 signature: res.razorpay_signature,
                 hostEmail: albumEmail,
+                ownerId: user?.id,
               }),
             });
             const v = await vRes.json();
@@ -648,6 +713,7 @@ export default function DispcamApp() {
       setPayError(err.message);
     }
   };
+  handleCreateEventRef.current = handleCreateEvent;
 
   // Capture current video stream canvas context framework frame and push raw data payload straight to bucket storage
   const handleShutterSnap = async () => {
@@ -1040,6 +1106,59 @@ export default function DispcamApp() {
     }
   };
 
+  // ── Host controls — the signed-in host's own film rolls ───────────────────
+  const loadMyEvents = async () => {
+    try {
+      if (!supabase || !user) return;
+      setMyEventsBusy(true);
+      // Owned by this account, or (legacy events) the album email matches.
+      const orFilter = user.email
+        ? `owner_id.eq.${user.id},host_email.eq.${user.email.toLowerCase()}`
+        : `owner_id.eq.${user.id}`;
+      const { data: evs, error } = await supabase
+        .from('events')
+        .select('id, name, reveal_at, max_photos_limit, max_guests, plan, host_email, owner_id, created_at')
+        .or(orFilter)
+        .order('created_at', { ascending: false });
+      if (error) throw error;
+      const ids = (evs || []).map((e) => e.id);
+      const counts = {};
+      if (ids.length) {
+        const { data: photoRows, error: pErr } = await supabase
+          .from('photos')
+          .select('event_id')
+          .in('event_id', ids);
+        if (pErr) throw pErr;
+        (photoRows || []).forEach((p) => { counts[p.event_id] = (counts[p.event_id] || 0) + 1; });
+      }
+      setMyEvents((evs || []).map((e) => ({ ...e, photoCount: counts[e.id] || 0 })));
+    } catch (e) {
+      setEventsError(e.message);
+      setMyEvents(null);
+    } finally {
+      setMyEventsBusy(false);
+    }
+  };
+
+  // Develop the film early — owner-only (RLS enforces it server-side)
+  const revealNow = async (id) => {
+    if (!supabase || !user) return;
+    setRevealBusyId(id);
+    try {
+      const { error } = await supabase
+        .from('events')
+        .update({ reveal_at: new Date().toISOString() })
+        .eq('id', id);
+      if (error) throw error;
+      await loadMyEvents();
+      loadDevelopedGallery(id);
+    } catch (e) {
+      alert('Could not reveal the film: ' + e.message);
+    } finally {
+      setRevealBusyId('');
+    }
+  };
+
   const openEvents = () => {
     if (typeof window !== 'undefined') window.scrollTo(0, 0);
     setView('events');
@@ -1050,6 +1169,7 @@ export default function DispcamApp() {
       }
     }
     loadEvents();
+    if (user) loadMyEvents(); else setMyEvents(null);
   };
 
   // Share an event link straight to WhatsApp
@@ -1622,6 +1742,73 @@ export default function DispcamApp() {
             <h1 className="font-display text-4xl md:text-5xl tracking-tight text-white">Events.</h1>
             <p className="mt-3 text-sm text-neutral-400 max-w-md mx-auto">Every film roll — developed, or still sealed in the darkroom.</p>
           </div>
+
+          {user && (
+            <section className="mb-14">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="font-display text-xl text-white tracking-tight">My film rolls</h2>
+                {myEvents !== null && (
+                  <button onClick={loadMyEvents} className="text-[11px] text-amber-400 uppercase tracking-widest hover:text-amber-300 transition">
+                    Refresh ↻
+                  </button>
+                )}
+              </div>
+              {myEventsBusy ? (
+                <p className="text-sm text-neutral-500 animate-pulse">Loading your rolls…</p>
+              ) : myEvents === null ? (
+                <button onClick={loadMyEvents} className="w-full rounded-2xl border border-dashed border-[#2C2C2E] py-8 text-sm text-neutral-500 hover:border-amber-500/40 hover:text-neutral-300 transition">
+                  Show my film rolls
+                </button>
+              ) : myEvents.length === 0 ? (
+                <p className="text-sm text-neutral-600">No events yet — the first one you create will appear here.</p>
+              ) : (
+                <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {myEvents.map((ev) => {
+                    const developed = new Date() > new Date(ev.reveal_at);
+                    const link = `${typeof window !== 'undefined' ? window.location.origin : ''}?room=${ev.id}`;
+                    const pct = Math.min(100, Math.round((ev.photoCount / Math.max(1, ev.max_photos_limit)) * 100));
+                    const isOwner = ev.owner_id === user.id;
+                    return (
+                      <div key={ev.id} className="rounded-2xl border border-amber-500/20 bg-[#121214] overflow-hidden flex flex-col">
+                        <button onClick={() => evaluateRoomRoute(ev.id)} className="text-left p-5 flex-1 group">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className={`text-[10px] uppercase tracking-widest px-2.5 py-1 rounded-full border ${developed ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' : 'text-amber-400 border-amber-500/30 bg-amber-500/10'}`}>
+                              {developed ? 'Developed' : 'Developing'}
+                            </span>
+                            <span className="text-[10px] text-neutral-600">{new Date(ev.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}</span>
+                          </div>
+                          <h3 className="font-display text-xl text-white mt-3 tracking-tight group-hover:text-amber-300 transition-colors">{ev.name}</h3>
+                          <p className="text-xs text-neutral-500 mt-1.5">{ev.photoCount} / {ev.max_photos_limit} shots</p>
+                          <div className="mt-2 h-1.5 rounded-full bg-[#1C1C1E] overflow-hidden">
+                            <div className="h-full rounded-full bg-gradient-to-r from-amber-500 to-amber-300 transition-all duration-700" style={{ width: `${pct}%` }} />
+                          </div>
+                        </button>
+                        <div className="p-3 border-t border-[#1C1C1E] bg-[#0F0F11] space-y-2">
+                          <div className="grid grid-cols-3 gap-2">
+                            <button onClick={() => shareOnWhatsApp(link, ev.name)} className="flex items-center justify-center gap-1 bg-[#25D366] text-black text-[11px] font-semibold py-2 rounded-lg hover:bg-[#1fb457] transition">
+                              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M17.5 14.4c-.3-.15-1.76-.87-2.03-.97-.27-.1-.47-.15-.67.15-.2.3-.77.97-.94 1.17-.17.2-.35.22-.65.07-.3-.15-1.26-.46-2.4-1.48-.89-.79-1.49-1.77-1.66-2.07-.17-.3-.02-.46.13-.61.13-.13.3-.35.45-.52.15-.17.2-.3.3-.5.1-.2.05-.37-.02-.52-.07-.15-.67-1.62-.92-2.22-.24-.58-.49-.5-.67-.51h-.57c-.2 0-.52.07-.8.37-.27.3-1.04 1.02-1.04 2.5 0 1.47 1.07 2.9 1.22 3.1.15.2 2.1 3.2 5.1 4.49.71.3 1.27.49 1.7.63.72.23 1.37.2 1.88.12.57-.09 1.76-.72 2.01-1.41.25-.7.25-1.29.17-1.41-.07-.13-.27-.2-.57-.35zM12.04 21.5h-.01a9.4 9.4 0 0 1-4.8-1.32l-.34-.2-3.56.93.95-3.47-.22-.36a9.42 9.42 0 0 1-1.44-5.02c0-5.2 4.24-9.44 9.45-9.44a9.4 9.4 0 0 1 6.68 2.77 9.39 9.39 0 0 1 2.76 6.69c0 5.2-4.24 9.43-9.46 9.43z"/></svg>
+                              Share
+                            </button>
+                            <button onClick={() => { navigator.clipboard.writeText(link); alert('Link copied!'); }} className="flex items-center justify-center border border-[#2C2C2E] text-neutral-300 text-[11px] py-2 rounded-lg hover:border-amber-500/50 hover:text-white transition">Copy</button>
+                            <button onClick={() => downloadEventQr(link, ev.name)} className="flex items-center justify-center border border-[#2C2C2E] text-neutral-300 text-[11px] py-2 rounded-lg hover:border-amber-500/50 hover:text-white transition">QR</button>
+                          </div>
+                          {isOwner && !developed && (
+                            <button
+                              onClick={() => revealNow(ev.id)}
+                              disabled={revealBusyId === ev.id}
+                              className="w-full flex items-center justify-center gap-2 bg-amber-400 text-black text-[11px] font-semibold py-2 rounded-lg hover:bg-amber-300 transition disabled:opacity-50"
+                            >
+                              {revealBusyId === ev.id ? 'Developing…' : '🎞 Reveal film now'}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+          )}
 
           {eventsList === null && eventsBusy ? (
             <p className="text-center py-16 text-neutral-500 text-sm animate-pulse">Developing the library…</p>

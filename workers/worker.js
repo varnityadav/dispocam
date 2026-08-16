@@ -283,7 +283,7 @@ export default {
     // (capacity is server-set from the tier — clients can't inflate it).
     if (url.pathname === '/verify-payment' && request.method === 'POST') {
       try {
-        const { eventName, revealAt, tier, orderId, paymentId, signature, hostEmail } = await request.json();
+        const { eventName, revealAt, tier, orderId, paymentId, signature, hostEmail, ownerId } = await request.json();
         const t = TIERS[tier];
         if (!t || t.price <= 0) return json({ error: 'Invalid tier' }, 400);
         if (!eventName || typeof eventName !== 'string' || eventName.length > 60) {
@@ -292,6 +292,9 @@ export default {
         if (!orderId || !paymentId || !signature) return json({ error: 'Missing payment fields' }, 400);
         const safeHostEmail = hostEmail && String(hostEmail).trim() ? String(hostEmail).trim().toLowerCase() : null;
         if (safeHostEmail && !EMAIL_RE.test(safeHostEmail)) return json({ error: 'Invalid hostEmail' }, 400);
+        // Ownership: the signed-in host's Supabase user id (validated as a UUID).
+        // Events created before sign-in became required have no owner — that's fine.
+        const safeOwnerId = ownerId && typeof ownerId === 'string' && UUID_RE.test(ownerId) ? ownerId : null;
 
         const revealDate = new Date(revealAt);
         if (Number.isNaN(revealDate.getTime()) || revealDate.getTime() <= Date.now()) {
@@ -323,6 +326,15 @@ export default {
         // Graceful guard: if the DB hasn't been updated with the host_email
         // column yet, retry WITHOUT it (keep payment_id/max_guests/plan —
         // dropping those would break idempotency and capacity enforcement).
+        // This insert runs with the SERVICE ROLE key (RLS bypass) because the
+        // Worker is the trusted server-side path: it verifies the Razorpay
+        // signature before it ever writes. If the secret is missing, fail loudly
+        // instead of silently falling back to the anon key (which RLS now
+        // rejects for event creation).
+        if (!env.SUPABASE_SERVICE_ROLE_KEY) {
+          return json({ error: 'Server misconfigured: SUPABASE_SERVICE_ROLE_KEY is not set' }, 500);
+        }
+        const serverKey = env.SUPABASE_SERVICE_ROLE_KEY;
         const buildInsert = (withHostEmail) => {
           const payload = {
             name: String(eventName).slice(0, 60),
@@ -332,30 +344,27 @@ export default {
             plan: tier,
             payment_id: paymentId,
           };
+          if (safeOwnerId) payload.owner_id = safeOwnerId;
           if (withHostEmail && safeHostEmail) payload.host_email = safeHostEmail;
           return payload;
+        };
+        const insertHeaders = {
+          apikey: serverKey,
+          Authorization: `Bearer ${serverKey}`,
+          'Content-Type': 'application/json',
+          Prefer: 'return=representation',
         };
 
         let insertRes = await fetch(`${env.SUPABASE_URL}/rest/v1/events`, {
           method: 'POST',
-          headers: {
-            apikey: env.SUPABASE_ANON_KEY,
-            Authorization: `Bearer ${env.SUPABASE_ANON_KEY}`,
-            'Content-Type': 'application/json',
-            Prefer: 'return=representation',
-          },
+          headers: insertHeaders,
           body: JSON.stringify(buildInsert(true)),
         });
         let rows = await insertRes.json();
         if ((!insertRes.ok || !rows?.[0]) && /host_email/.test(rows?.message || '')) {
           insertRes = await fetch(`${env.SUPABASE_URL}/rest/v1/events`, {
             method: 'POST',
-            headers: {
-              apikey: env.SUPABASE_ANON_KEY,
-              Authorization: `Bearer ${env.SUPABASE_ANON_KEY}`,
-              'Content-Type': 'application/json',
-              Prefer: 'return=representation',
-            },
+            headers: insertHeaders,
             body: JSON.stringify(buildInsert(false)),
           });
           rows = await insertRes.json();
