@@ -33,16 +33,54 @@ const loadRazorpayScript = () => new Promise((resolve) => {
 // and baked into the captured JPEG (ctx.filter + canvas overlays), so the saved
 // photo always matches what the guest saw. Looks are modeled on the most-used
 // Instagram/creator trends: retro faded, studio flash, film burn & light leaks,
-// soft monotone gray, golden hour, and crisp black & white.
+// X-Pro II, soft monotone gray, golden hour, and crisp black & white.
+// css/overlay are functions of intensity t (0 = subtle, 1 = most dramatic) so
+// guests can dial any filter from barely-there to full-strength.
 // ─────────────────────────────────────────────────────────────────────────────
 const FILTERS = [
-  { id: 'none',   name: 'Original',      css: 'saturate(1.05) contrast(1.02)', overlay: null, swatch: '#9ca3af' },
-  { id: 'retro',  name: 'Retro',         css: 'sepia(0.35) saturate(1.2) contrast(0.85) brightness(1.07)', overlay: { vignette: 0.22, tint: 'rgba(255,170,90,0.08)', grain: 0.04 }, swatch: '#d4a853' },
-  { id: 'flash',  name: 'Studio Flash',  css: 'brightness(1.32) contrast(0.96) saturate(0.9)', overlay: { vignette: 0.4 }, swatch: '#e8e6f0' },
-  { id: 'burn',   name: 'Film Burn',     css: 'sepia(0.28) saturate(1.35) contrast(1.05) brightness(0.96)', overlay: { vignette: 0.18, leaks: [ { x: 0, y: 0, rgb: '255,84,44', alpha: 0.5, size: 0.6 }, { x: 1, y: 1, rgb: '255,150,40', alpha: 0.42, size: 0.55 } ], grain: 0.07 }, swatch: '#e05b3c' },
-  { id: 'mono',   name: 'Monotone Gray', css: 'grayscale(1) contrast(0.82) brightness(1.08)', overlay: { vignette: 0.12, grain: 0.03 }, swatch: '#8a8a8a' },
-  { id: 'golden', name: 'Golden Hour',   css: 'sepia(0.45) saturate(1.5) hue-rotate(-12deg) brightness(1.12) contrast(0.95)', overlay: { tint: 'rgba(255,150,60,0.12)' }, swatch: '#f5a623' },
-  { id: 'bw',     name: 'Black & White', css: 'grayscale(1) contrast(1.18) brightness(1.04)', overlay: { vignette: 0.15 }, swatch: '#e4e4e4' },
+  { id: 'none', name: 'Original', swatch: '#9ca3af', css: 'saturate(1.05) contrast(1.02)', overlay: null },
+  {
+    id: 'retro', name: 'Retro', swatch: '#d4a853',
+    css: (t) => `sepia(${(0.3 + 0.45 * t).toFixed(2)}) saturate(${(1.15 + 0.45 * t).toFixed(2)}) contrast(${(0.95 - 0.3 * t).toFixed(2)}) brightness(${(1.06 + 0.08 * t).toFixed(2)})`,
+    overlay: (t) => ({ vignette: 0.18 + 0.38 * t, tint: `rgba(255,170,90,${(0.05 + 0.11 * t).toFixed(3)})`, grain: 0.03 + 0.06 * t }),
+  },
+  {
+    id: 'flash', name: 'Studio Flash', swatch: '#e8e6f0',
+    css: (t) => `brightness(${(1.15 + 0.35 * t).toFixed(2)}) contrast(${(1.0 - 0.12 * t).toFixed(2)}) saturate(${(0.95 - 0.15 * t).toFixed(2)})`,
+    overlay: (t) => ({ vignette: 0.3 + 0.3 * t, tint: `rgba(190,215,255,${(0.02 + 0.05 * t).toFixed(3)})` }),
+  },
+  {
+    id: 'burn', name: 'Film Burn', swatch: '#e05b3c',
+    css: (t) => `sepia(${(0.15 + 0.4 * t).toFixed(2)}) saturate(${(1.25 + 0.5 * t).toFixed(2)}) contrast(${(1.02 + 0.18 * t).toFixed(2)}) brightness(${(0.97 - 0.06 * t).toFixed(2)})`,
+    overlay: (t) => ({
+      vignette: 0.15 + 0.2 * t,
+      leaks: [
+        { x: 0, y: 0, rgb: '255,84,44', alpha: 0.15 + 0.5 * t, size: 0.5 + 0.15 * t },
+        { x: 1, y: 1, rgb: '255,150,40', alpha: 0.1 + 0.42 * t, size: 0.45 + 0.15 * t },
+      ],
+      grain: 0.04 + 0.1 * t,
+    }),
+  },
+  {
+    id: 'xpro', name: 'X-Pro II', swatch: '#b5651d',
+    css: (t) => `sepia(${(0.1 + 0.3 * t).toFixed(2)}) saturate(${(1.1 + 0.4 * t).toFixed(2)}) contrast(${(1.08 + 0.3 * t).toFixed(2)}) brightness(${(1.0 - 0.06 * t).toFixed(2)})`,
+    overlay: (t) => ({ vignette: 0.25 + 0.45 * t, grain: 0.03 + 0.05 * t }),
+  },
+  {
+    id: 'mono', name: 'Monotone Gray', swatch: '#8a8a8a',
+    css: (t) => `grayscale(1) contrast(${(0.95 - 0.25 * t).toFixed(2)}) brightness(${(1.06 + 0.08 * t).toFixed(2)})`,
+    overlay: (t) => ({ vignette: 0.08 + 0.12 * t, grain: 0.02 + 0.04 * t }),
+  },
+  {
+    id: 'golden', name: 'Golden Hour', swatch: '#f5a623',
+    css: (t) => `sepia(${(0.3 + 0.5 * t).toFixed(2)}) saturate(${(1.3 + 0.6 * t).toFixed(2)}) hue-rotate(${(-6 - 14 * t).toFixed(0)}deg) brightness(${(1.06 + 0.14 * t).toFixed(2)}) contrast(${(0.98 - 0.08 * t).toFixed(2)})`,
+    overlay: (t) => ({ tint: `rgba(255,150,60,${(0.06 + 0.14 * t).toFixed(3)})` }),
+  },
+  {
+    id: 'bw', name: 'Black & White', swatch: '#e4e4e4',
+    css: (t) => `grayscale(1) contrast(${(1.05 + 0.4 * t).toFixed(2)}) brightness(${(1.03 + 0.04 * t).toFixed(2)})`,
+    overlay: (t) => ({ vignette: 0.08 + 0.22 * t, grain: 0.03 * t }),
+  },
 ];
 
 // Reusable film-grain tile for the canvas bake (created once, lazily).
@@ -198,6 +236,9 @@ export default function DispcamApp() {
   const [timeLeft, setTimeLeft] = useState(0);
   const [rollState, setRollState] = useState('active'); // 'active' | 'collapsing' | 'finished'
   const [activeFilter, setActiveFilter] = useState('none'); // live film filter id (FILTERS)
+  const [filterIntensity, setFilterIntensity] = useState(0.6); // 0 (subtle) → 1 (dramatic)
+  const [cameraFacing, setCameraFacing] = useState('environment'); // 'environment' | 'user'
+  const [flashOn, setFlashOn] = useState(false); // torch on supported devices
   
   // Hardware Camera Viewport Reference Layers
   const videoRef = useRef(null);
@@ -207,6 +248,10 @@ export default function DispcamApp() {
   // shutter-to-next-shot gap is just the JPEG encode + PUT — no extra round trip).
   const uploadUrlRef = useRef(null); // { url, path }
   const prefetchBusyRef = useRef(false);
+  // Live refs for async camera setup (startCameraHardware / flipCamera run in
+  // callbacks that can outlive a render — never trust stale state in them).
+  const cameraFacingRef = useRef('environment');
+  const flashRef = useRef(false);
   // Recipients already attempted this session (the Worker's R2 marker handles cross-session dedupe)
   const deliveredSetRef = useRef(new Set());
 
@@ -384,15 +429,60 @@ export default function DispcamApp() {
   const startCameraHardware = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: "environment" } },
+        video: { facingMode: { ideal: cameraFacingRef.current } },
         audio: false
       });
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         streamRef.current = stream;
       }
+      if (flashRef.current) await applyTorch(stream, true);
     } catch (err) {
       alert("Camera access denied. Please grant camera permissions in your browser settings.");
+    }
+  };
+
+  // Real flashlight (torch) where the browser/device supports it; on devices
+  // without torch (e.g. front cameras, iOS) the button is a visual toggle only.
+  const applyTorch = async (stream, on) => {
+    const track = stream?.getVideoTracks?.()[0];
+    if (!track) return;
+    try {
+      await track.applyConstraints({ advanced: [{ torch: on }] });
+    } catch (e) {
+      // unsupported — the UI toggle still gives feedback
+    }
+  };
+
+  const toggleFlash = async () => {
+    const next = !flashRef.current;
+    flashRef.current = next;
+    setFlashOn(next);
+    if (streamRef.current) await applyTorch(streamRef.current, next);
+  };
+
+  // Flip between the rear (environment) and front (selfie) cameras.
+  const flipCamera = async () => {
+    const next = cameraFacingRef.current === 'environment' ? 'user' : 'environment';
+    cameraFacingRef.current = next;
+    setCameraFacing(next);
+    stopCameraHardware();
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: next } },
+        audio: false,
+      });
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        streamRef.current = stream;
+      }
+      if (flashRef.current) await applyTorch(stream, true);
+    } catch (err) {
+      cameraFacingRef.current = cameraFacingRef.current === 'environment' ? 'user' : 'environment';
+      setCameraFacing(cameraFacingRef.current);
+      alert('Could not switch camera: ' + err.message);
+      // The old stream was already stopped — bring the original camera back.
+      startCameraHardware();
     }
   };
 
@@ -580,15 +670,19 @@ export default function DispcamApp() {
       canvas.height = video.videoHeight || 480;
       
       const ctx = canvas.getContext('2d');
-      // Bake the active filter into the captured photo so it matches the live preview.
+      // Bake the active filter (at the current intensity) into the captured photo
+      // so it matches the live preview.
+      const bakeT = activeFilter === 'none' ? 0 : filterIntensity;
+      const bakeCss = typeof activeFilterObj.css === 'function' ? activeFilterObj.css(bakeT) : activeFilterObj.css;
+      const bakeOverlay = typeof activeFilterObj.overlay === 'function' ? activeFilterObj.overlay(bakeT) : activeFilterObj.overlay;
       if (typeof ctx.filter === 'string') {
-        ctx.filter = activeFilterObj.css || 'none';
+        ctx.filter = bakeCss || 'none';
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
         ctx.filter = 'none';
       } else {
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       }
-      bakeFilterOverlay(ctx, canvas.width, canvas.height, activeFilterObj.overlay);
+      bakeFilterOverlay(ctx, canvas.width, canvas.height, bakeOverlay);
       
       const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.85));
       if (!blob) {
@@ -983,8 +1077,12 @@ export default function DispcamApp() {
       .catch((err) => console.warn('QR generation failed:', err));
   };
 
-  // Active filter object shared by the live preview and the capture bake
+  // Active filter object shared by the live preview and the capture bake —
+  // resolved at the current intensity (slider), so preview always matches photo.
   const activeFilterObj = FILTERS.find((f) => f.id === activeFilter) || FILTERS[0];
+  const filterT = activeFilter === 'none' ? 0 : filterIntensity;
+  const activeFilterCss = typeof activeFilterObj.css === 'function' ? activeFilterObj.css(filterT) : activeFilterObj.css;
+  const activeFilterOverlay = typeof activeFilterObj.overlay === 'function' ? activeFilterObj.overlay(filterT) : activeFilterObj.overlay;
 
   return (
     <>
@@ -1059,6 +1157,28 @@ export default function DispcamApp() {
           }
           .no-scrollbar { scrollbar-width: none; }
           .no-scrollbar::-webkit-scrollbar { display: none; }
+
+          /* Filter intensity slider — amber film-strip on dark */
+          .filter-slider {
+            -webkit-appearance: none; appearance: none;
+            height: 4px; border-radius: 999px;
+            background: linear-gradient(to right, #3f3f46, #f59e0b);
+            outline: none; cursor: pointer;
+          }
+          .filter-slider::-webkit-slider-thumb {
+            -webkit-appearance: none; appearance: none;
+            width: 18px; height: 18px; border-radius: 9999px;
+            background: radial-gradient(circle at 35% 30%, #fcd34d, #b45309);
+            border: 2px solid #0a0a0a;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.6);
+          }
+          .filter-slider::-moz-range-thumb {
+            width: 18px; height: 18px; border-radius: 9999px;
+            background: radial-gradient(circle at 35% 30%, #fcd34d, #b45309);
+            border: 2px solid #0a0a0a;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.6);
+            cursor: pointer;
+          }
           @media (prefers-reduced-motion: reduce) {
             .flip-flap-top, .flip-flap-bottom { animation: none; }
           }
@@ -1264,30 +1384,51 @@ export default function DispcamApp() {
               </div>
             </header>
 
-            <div className="w-full aspect-[3/4] max-h-[calc(92vh-190px)] border border-[#1C1C1E] bg-black rounded-2xl relative overflow-hidden shadow-inner flex items-center justify-center">
+            <div className={`w-full aspect-[3/4] ${activeFilter === 'none' ? 'max-h-[calc(92vh-190px)]' : 'max-h-[calc(92vh-248px)]'} border border-[#1C1C1E] bg-black rounded-2xl relative overflow-hidden shadow-inner flex items-center justify-center`}>
               <video
                 ref={videoRef} autoPlay playsInline muted
-                className="w-full h-full object-cover transition-[filter] duration-300"
-                style={{ filter: activeFilterObj.css }}
+                className="w-full h-full object-cover"
+                style={{ filter: activeFilterCss }}
               />
 
               {/* live filter overlay layers — mirror the canvas bake so WYSIWYG */}
-              {activeFilterObj.overlay && (
+              {activeFilterOverlay && (
                 <>
-                  {activeFilterObj.overlay.vignette ? (
-                    <div className="absolute inset-0 pointer-events-none" style={{ background: `radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,${activeFilterObj.overlay.vignette}) 100%)` }} />
+                  {activeFilterOverlay.vignette ? (
+                    <div className="absolute inset-0 pointer-events-none" style={{ background: `radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,${activeFilterOverlay.vignette}) 100%)` }} />
                   ) : null}
-                  {activeFilterObj.overlay.tint ? (
-                    <div className="absolute inset-0 pointer-events-none" style={{ background: activeFilterObj.overlay.tint }} />
+                  {activeFilterOverlay.tint ? (
+                    <div className="absolute inset-0 pointer-events-none" style={{ background: activeFilterOverlay.tint }} />
                   ) : null}
-                  {(activeFilterObj.overlay.leaks || []).map((leak, i) => (
+                  {(activeFilterOverlay.leaks || []).map((leak, i) => (
                     <div key={i} className="absolute inset-0 pointer-events-none" style={{ background: `radial-gradient(circle at ${leak.x * 100}% ${leak.y * 100}%, rgba(${leak.rgb},${leak.alpha}) 0%, rgba(${leak.rgb},0) 65%)` }} />
                   ))}
-                  {activeFilterObj.overlay.grain ? (
-                    <div className="absolute inset-0 pointer-events-none film-grain" style={{ opacity: activeFilterObj.overlay.grain }} />
+                  {activeFilterOverlay.grain ? (
+                    <div className="absolute inset-0 pointer-events-none film-grain" style={{ opacity: activeFilterOverlay.grain }} />
                   ) : null}
                 </>
               )}
+
+              {/* camera controls — flip + flash (top-left) */}
+              <div className="absolute top-6 left-6 flex items-center gap-2 z-20">
+                <button
+                  onClick={flipCamera}
+                  aria-label={cameraFacing === 'environment' ? 'Switch to front camera' : 'Switch to rear camera'}
+                  title={cameraFacing === 'environment' ? 'Switch to front camera' : 'Switch to rear camera'}
+                  className="w-9 h-9 rounded-full bg-black/70 border border-neutral-700 text-white flex items-center justify-center backdrop-blur-md hover:bg-black/90 active:scale-95 transition"
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v5h-5"/></svg>
+                </button>
+                <button
+                  onClick={toggleFlash}
+                  aria-pressed={flashOn}
+                  aria-label="Toggle flash"
+                  title={flashOn ? 'Flash on' : 'Flash off'}
+                  className={`w-9 h-9 rounded-full border flex items-center justify-center backdrop-blur-md active:scale-95 transition ${flashOn ? 'bg-amber-500 text-black border-amber-400' : 'bg-black/70 border-neutral-700 text-white hover:bg-black/90'}`}
+                >
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill={flashOn ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"><path d="M13 2 4.5 13.5H11L9.5 22 19 10.5h-6.5L13 2z"/></svg>
+                </button>
+              </div>
 
               <div className="absolute top-6 right-6 font-mono text-base tracking-wider text-amber-500 bg-black/80 border border-neutral-800 px-3 py-1 rounded-md backdrop-blur-md">
                 {photoCount} / {getActiveLimit()}
@@ -1315,6 +1456,24 @@ export default function DispcamApp() {
                 </button>
               ))}
             </div>
+
+            {/* Filter intensity — subtle on the left, most dramatic on the right */}
+            {activeFilter !== 'none' && (
+              <div className="w-full flex items-center gap-3 px-2 py-0.5 shrink-0">
+                <span className="text-[9px] uppercase tracking-[0.25em] text-neutral-500">Effect</span>
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  value={filterIntensity}
+                  onChange={(e) => setFilterIntensity(parseFloat(e.target.value))}
+                  aria-label={`${activeFilterObj.name} intensity`}
+                  className="filter-slider flex-1"
+                />
+                <span className="text-[9px] uppercase tracking-widest text-amber-500/90 w-9 text-right tabular-nums">{Math.round(filterIntensity * 100)}%</span>
+              </div>
+            )}
 
             <footer className="w-full flex flex-col items-center space-y-4 pb-2">
               <button
