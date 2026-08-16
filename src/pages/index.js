@@ -342,15 +342,6 @@ export default function DispcamApp() {
     }
   }, [user]);
 
-  // PostHog SPA pageviews — fire $pageview on mount and on every view change.
-  // (The snippet in _document.js is initialized with capture_pageview:false so
-  // there's exactly one source of truth for pageviews.)
-  useEffect(() => {
-    if (typeof window !== 'undefined' && window.posthog) {
-      window.posthog.capture('$pageview');
-    }
-  }, [view]);
-
   const signInWithGoogle = async () => {
     if (!supabase) { alert(NOT_CONFIGURED); return; }
     const { error } = await supabase.auth.signInWithOAuth({
