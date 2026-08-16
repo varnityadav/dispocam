@@ -34,11 +34,11 @@ const corsHeaders = {
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-// Pricing tiers — free forever up to 10 guests, then paid capacity with 25 shots
+// Pricing tiers — free forever up to 5 guests, then paid capacity with 25 shots
 // per guest at a declining per-guest price (approved by the founder).
-// ⚠️ Mirrored in src/pages/index.js (TIERS) — keep both in sync when pricing changes.
+// ⚠️ Mirrored in src/lib/pricing.js (TIERS) — keep both in sync when pricing changes.
 const TIERS = {
-  free: { guests: 10, shots: 10, price: 0 },
+  free: { guests: 5, shots: 5, price: 0 },
   t50: { guests: 50, shots: 25, price: 1799 },
   t100: { guests: 100, shots: 25, price: 3499 },
   t150: { guests: 150, shots: 25, price: 4799 },

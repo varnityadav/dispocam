@@ -64,7 +64,7 @@ const FAQS = [
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Marquee scene: a DSLR that flashes every 3s, then a hand holding a phone
-// with a film reel of sample photos spooling out of it.
+// with a film reel of sample photos spooling out of its right side.
 // ─────────────────────────────────────────────────────────────────────────────
 
 function DslrSvg() {
@@ -114,18 +114,19 @@ function MarqueeScene() {
         </div>
       </div>
 
-      {/* hand holding the phone, with a film reel rising out of it */}
-      <div className="relative w-[200px] h-[150px]">
-        <div className="absolute left-1/2 -translate-x-1/2 -top-9 w-[62px] h-[196px] z-10">
-          <div className="absolute left-0 top-0 bottom-0 w-[9px] sprockets-v" />
-          <div className="absolute right-0 top-0 bottom-0 w-[9px] sprockets-v" />
-          <div className="absolute left-[9px] right-[9px] top-0 bottom-0 overflow-hidden bg-[#141416] rounded-[3px] border border-[#26262b]">
-            <div className="film-reel-run">
+      {/* hand holding the phone, with a film reel spooling out of its right side */}
+      <div className="relative w-[320px] h-[160px]">
+        {/* horizontal film strip emerging from the phone's right edge, spooling away */}
+        <div className="absolute left-[206px] top-1/2 -translate-y-1/2 w-[110px] h-[56px] z-10">
+          <div className="absolute left-0 right-0 top-0 h-[8px] sprockets-h" />
+          <div className="absolute left-0 right-0 bottom-0 h-[8px] sprockets-h" />
+          <div className="absolute left-0 right-0 top-[8px] bottom-[8px] overflow-hidden bg-[#141416] rounded-[3px] border border-[#26262b]">
+            <div className="film-reel-run h-full flex items-stretch">
               {[0, 1].map((dup) => (
-                <div key={dup} className="flex flex-col shrink-0">
+                <div key={dup} className="flex flex-row shrink-0 items-stretch">
                   {REEL_FRAMES.map((src, i) => (
-                    <div key={i} className="shrink-0 m-[6px] rounded-[2px] overflow-hidden bg-black">
-                      <img src={src} alt="" loading="lazy" className="w-full aspect-[3/4] object-cover" />
+                    <div key={i} className="shrink-0 m-[4px] rounded-[2px] overflow-hidden bg-black">
+                      <img src={src} alt="" loading="lazy" className="h-full aspect-[3/4] object-cover" />
                     </div>
                   ))}
                 </div>
@@ -134,7 +135,7 @@ function MarqueeScene() {
           </div>
         </div>
         <img src={ONCE_HERO.hand} alt="" loading="lazy" className="absolute left-0 bottom-0 w-[128px] rotate-[-5deg] z-20 drop-shadow-2xl" />
-        <img src={ONCE_HERO.phone} alt="" loading="lazy" className="absolute right-1 bottom-0 w-[112px] rotate-[4deg] z-30 drop-shadow-2xl" />
+        <img src={ONCE_HERO.phone} alt="" loading="lazy" className="absolute left-[100px] bottom-0 w-[112px] rotate-[4deg] z-30 drop-shadow-2xl" />
       </div>
 
       <span className="text-amber-500 text-2xl drop-shadow-[0_0_12px_rgba(245,158,11,0.6)]">✦</span>
@@ -261,12 +262,12 @@ export default function Landing({ onCreateEvent, onChooseTier, onOpenEvents, onO
           1.6% { transform: translateY(2px) scale(1.02); }
         }
 
-        /* film reel spooling out of the phone */
-        .film-reel-run { animation: reelScroll 7s linear infinite; }
-        @keyframes reelScroll { from { transform: translateY(0); } to { transform: translateY(-50%); } }
-        .sprockets-v {
+        /* film reel spooling out of the right side of the phone */
+        .film-reel-run { animation: reelScrollX 6s linear infinite; }
+        @keyframes reelScrollX { from { transform: translateX(-50%); } to { transform: translateX(0); } }
+        .sprockets-h {
           background-image: radial-gradient(circle at center, rgba(245, 245, 247, 0.5) 2px, transparent 2.6px);
-          background-size: 9px 24px;
+          background-size: 22px 8px;
           background-position: center;
         }
 
@@ -587,7 +588,7 @@ export default function Landing({ onCreateEvent, onChooseTier, onOpenEvents, onO
             <span className="font-serif-accent text-amber-400/90">Priced for the size of your day.</span>
           </h2>
           <p data-reveal-rise data-delay="160" className="mt-5 text-neutral-400 max-w-xl text-sm md:text-base leading-relaxed">
-            Events up to 10 guests are free forever. Beyond that everyone gets 25 shots each — and the bigger
+            Events up to 5 guests are free forever. Beyond that everyone gets 25 shots each — and the bigger
             the event, the less each guest costs you.
           </p>
 
@@ -613,7 +614,7 @@ export default function Landing({ onCreateEvent, onChooseTier, onOpenEvents, onO
                   {p.price > 0 && <p className="text-[11px] text-neutral-500">/event</p>}
                 </div>
                 <p className="mt-1 text-[11px] text-neutral-600">
-                  {p.price === 0 ? '10 shots each · ₹0 forever' : `≈ ₹${Math.round(p.price / p.guests)} per guest`}
+                  {p.price === 0 ? '5 shots each · ₹0 forever' : `≈ ₹${Math.round(p.price / p.guests)} per guest`}
                 </p>
                 <button
                   onClick={() => handleChooseTier(p.id)}

@@ -129,6 +129,10 @@ export default function DispcamApp() {
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const rollTimerRef = useRef(null);
+  // Pre-signed R2 upload URL for the NEXT shot (pre-fetched while idle so the
+  // shutter-to-next-shot gap is just the JPEG encode + PUT — no extra round trip).
+  const uploadUrlRef = useRef(null); // { url, path }
+  const prefetchBusyRef = useRef(false);
   // Recipients already attempted this session (the Worker's R2 marker handles cross-session dedupe)
   const deliveredSetRef = useRef(new Set());
 
@@ -486,7 +490,7 @@ export default function DispcamApp() {
     if (uploading) return;
     
     const params = new URLSearchParams(window.location.search);
-    const limitConstraint = parseInt(params.get('limit')) || eventData?.max_photos_limit || 10;
+    const limitConstraint = parseInt(params.get('limit')) || eventData?.max_photos_limit || 5;
 
     if (photoCount >= limitConstraint) {
       alert("Out of film! All " + getActiveLimit() + " shots have been used.");
@@ -508,24 +512,56 @@ export default function DispcamApp() {
       if (!blob) {
         throw new Error("Failed to capture image from camera feed");
       }
-      const fileId = `${Date.now()}-${Math.random().toString(36).substring(7)}`;
-      const storagePath = `once-films/${eventData.id}/${fileId}.jpg`;
-      
-      // Ask the Worker for a presigned URL, then upload the photo straight to R2
-      if (!R2_WORKER_URL) throw new Error(NOT_CONFIGURED);
-      const signedRes = await fetch(`${R2_WORKER_URL}/upload-url`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: storagePath, contentType: 'image/jpeg' })
-      });
-      const signedJson = await signedRes.json();
-      if (!signedJson.url) throw new Error(signedJson.error || 'Failed to get upload URL');
 
-      await fetch(signedJson.url, {
+      // Use the pre-signed URL if one is ready and still valid (typical),
+      // otherwise sign inline.
+      const pending = uploadUrlRef.current;
+      uploadUrlRef.current = null;
+      let storagePath;
+      let signedUrl;
+      const freshEnough = pending && pending.url && pending.path && pending.expiresAt > Date.now();
+      if (freshEnough) {
+        storagePath = pending.path;
+        signedUrl = pending.url;
+      } else {
+        const fileId = `${Date.now()}-${Math.random().toString(36).substring(7)}`;
+        storagePath = `once-films/${eventData.id}/${fileId}.jpg`;
+        // Ask the Worker for a presigned URL, then upload the photo straight to R2
+        if (!R2_WORKER_URL) throw new Error(NOT_CONFIGURED);
+        const signedRes = await fetch(`${R2_WORKER_URL}/upload-url`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: storagePath, contentType: 'image/jpeg' })
+        });
+        const signedJson = await signedRes.json();
+        if (!signedJson.url) throw new Error(signedJson.error || 'Failed to get upload URL');
+        signedUrl = signedJson.url;
+      }
+
+      // Upload straight to R2. If the pre-signed URL expired between signing and
+      // this PUT (a guest sitting on the camera for a few minutes), re-sign
+      // inline and retry once before surfacing the error.
+      let putRes = await fetch(signedUrl, {
         method: 'PUT',
         headers: { 'Content-Type': 'image/jpeg' },
         body: blob
       });
+      if (putRes.status === 401 || putRes.status === 403) {
+        if (!R2_WORKER_URL) throw new Error(NOT_CONFIGURED);
+        const reSignedRes = await fetch(`${R2_WORKER_URL}/upload-url`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: storagePath, contentType: 'image/jpeg' })
+        });
+        const reSignedJson = await reSignedRes.json();
+        if (!reSignedJson.url) throw new Error(reSignedJson.error || 'Failed to get upload URL');
+        putRes = await fetch(reSignedJson.url, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'image/jpeg' },
+          body: blob
+        });
+      }
+      if (!putRes.ok) throw new Error('Upload failed (HTTP ' + putRes.status + ')');
 
       // Log the shot in the photos table so it can be found at reveal time
       if (!supabase) throw new Error(NOT_CONFIGURED);
@@ -546,6 +582,7 @@ export default function DispcamApp() {
       if (insertError) throw insertError;
 
       setPhotoCount(prev => prev + 1);
+      prefetchUploadUrl(); // fire-and-forget — keep the next shot fast
 
       // Last shot taken — collapse the camera and show the "out of films" message for 10s
       if (photoCount + 1 >= limitConstraint) {
@@ -748,12 +785,42 @@ export default function DispcamApp() {
     }
   };
 
+  // Pre-sign the upload URL for the next shot while the camera is idle, so each
+  // new shot starts uploading instantly. Falls back to inline signing on failure.
+  const prefetchUploadUrl = async () => {
+    if (prefetchBusyRef.current) return;
+    if (!R2_WORKER_URL || !eventData?.id) return;
+    prefetchBusyRef.current = true;
+    const fileId = `${Date.now()}-${Math.random().toString(36).substring(7)}`;
+    const storagePath = `once-films/${eventData.id}/${fileId}.jpg`;
+    try {
+      const res = await fetch(`${R2_WORKER_URL}/upload-url`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: storagePath, contentType: 'image/jpeg' }),
+      });
+      const j = await res.json();
+      // Signed URLs are valid 300s; keep a 60s safety margin before discarding.
+      if (j.url) uploadUrlRef.current = { url: j.url, path: storagePath, expiresAt: Date.now() + 240000 };
+    } catch (e) {
+      // leave the ref empty — the shutter will sign inline as a fallback
+    } finally {
+      prefetchBusyRef.current = false;
+    }
+  };
+
+  // Keep a signed URL ready for the whole time the camera view is open
+  useEffect(() => {
+    if (view === 'camera' && eventData?.id) prefetchUploadUrl();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, eventData]);
+
   const getActiveLimit = () => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
-      return parseInt(params.get('limit')) || eventData?.max_photos_limit || 10;
+      return parseInt(params.get('limit')) || eventData?.max_photos_limit || 5;
     }
-    return 10;
+    return 5;
   };
 
   const handleEnterApp = () => {
@@ -1115,8 +1182,8 @@ export default function DispcamApp() {
               </div>
 
               {uploading && (
-                <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center">
-                  <p className="text-xs tracking-widest text-amber-500 uppercase animate-pulse">Winding Film Roll...</p>
+                <div className="absolute inset-0 bg-black/30 flex items-center justify-center">
+                  <p className="text-[11px] tracking-[0.3em] text-amber-500 uppercase">Winding…</p>
                 </div>
               )}
             </div>

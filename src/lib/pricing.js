@@ -9,7 +9,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const TIERS = {
-  free: { guests: 10, shots: 10, price: 0 },
+  free: { guests: 5, shots: 5, price: 0 },
   t50: { guests: 50, shots: 25, price: 1799 },
   t100: { guests: 100, shots: 25, price: 3499 },
   t150: { guests: 150, shots: 25, price: 4799 },
