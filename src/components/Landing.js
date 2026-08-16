@@ -713,8 +713,8 @@ export default function Landing({ onCreateEvent, onChooseTier, onOpenEvents, onO
             <div>
               <p className="text-[11px] uppercase tracking-[0.25em] text-neutral-600 mb-4">Company</p>
               <button onClick={handleCreate} className="block text-sm text-neutral-400 hover:text-white py-1 transition-colors">Create an event</button>
-              <p className="block text-sm text-neutral-600 py-1">Privacy</p>
-              <p className="block text-sm text-neutral-600 py-1">Terms</p>
+              <a href="/privacy.html" className="block text-sm text-neutral-400 hover:text-white py-1 transition-colors">Privacy</a>
+              <a href="/terms.html" className="block text-sm text-neutral-400 hover:text-white py-1 transition-colors">Terms</a>
             </div>
             <div className="col-span-2 md:col-span-1">
               <p className="text-[11px] uppercase tracking-[0.25em] text-neutral-600 mb-4">DispoCam</p>
