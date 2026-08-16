@@ -29,6 +29,79 @@ const loadRazorpayScript = () => new Promise((resolve) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Live camera filters — previewed on the <video> (CSS filter + overlay layers)
+// and baked into the captured JPEG (ctx.filter + canvas overlays), so the saved
+// photo always matches what the guest saw. Looks are modeled on the most-used
+// Instagram/creator trends: retro faded, studio flash, film burn & light leaks,
+// soft monotone gray, golden hour, and crisp black & white.
+// ─────────────────────────────────────────────────────────────────────────────
+const FILTERS = [
+  { id: 'none',   name: 'Original',      css: 'saturate(1.05) contrast(1.02)', overlay: null, swatch: '#9ca3af' },
+  { id: 'retro',  name: 'Retro',         css: 'sepia(0.35) saturate(1.2) contrast(0.85) brightness(1.07)', overlay: { vignette: 0.22, tint: 'rgba(255,170,90,0.08)', grain: 0.04 }, swatch: '#d4a853' },
+  { id: 'flash',  name: 'Studio Flash',  css: 'brightness(1.32) contrast(0.96) saturate(0.9)', overlay: { vignette: 0.4 }, swatch: '#e8e6f0' },
+  { id: 'burn',   name: 'Film Burn',     css: 'sepia(0.28) saturate(1.35) contrast(1.05) brightness(0.96)', overlay: { vignette: 0.18, leaks: [ { x: 0, y: 0, rgb: '255,84,44', alpha: 0.5, size: 0.6 }, { x: 1, y: 1, rgb: '255,150,40', alpha: 0.42, size: 0.55 } ], grain: 0.07 }, swatch: '#e05b3c' },
+  { id: 'mono',   name: 'Monotone Gray', css: 'grayscale(1) contrast(0.82) brightness(1.08)', overlay: { vignette: 0.12, grain: 0.03 }, swatch: '#8a8a8a' },
+  { id: 'golden', name: 'Golden Hour',   css: 'sepia(0.45) saturate(1.5) hue-rotate(-12deg) brightness(1.12) contrast(0.95)', overlay: { tint: 'rgba(255,150,60,0.12)' }, swatch: '#f5a623' },
+  { id: 'bw',     name: 'Black & White', css: 'grayscale(1) contrast(1.18) brightness(1.04)', overlay: { vignette: 0.15 }, swatch: '#e4e4e4' },
+];
+
+// Reusable film-grain tile for the canvas bake (created once, lazily).
+let grainCanvasCache = null;
+function getGrainCanvas() {
+  if (grainCanvasCache) return grainCanvasCache;
+  grainCanvasCache = document.createElement('canvas');
+  grainCanvasCache.width = 256;
+  grainCanvasCache.height = 256;
+  const c = grainCanvasCache.getContext('2d');
+  const img = c.createImageData(256, 256);
+  for (let i = 0; i < img.data.length; i += 4) {
+    const v = (Math.random() * 255) | 0;
+    img.data[i] = img.data[i + 1] = img.data[i + 2] = v;
+    img.data[i + 3] = 255;
+  }
+  c.putImageData(img, 0, 0);
+  return grainCanvasCache;
+}
+
+// Bake a filter's overlay layers (vignette / tint / light leaks / grain) onto
+// the capture canvas so the saved JPEG matches the live preview exactly.
+function bakeFilterOverlay(ctx, w, h, overlay) {
+  if (!overlay) return;
+  if (overlay.vignette) {
+    const r = Math.max(w, h) * 0.72;
+    const g = ctx.createRadialGradient(w / 2, h / 2, r * 0.45, w / 2, h / 2, r);
+    g.addColorStop(0, 'rgba(0,0,0,0)');
+    g.addColorStop(1, `rgba(0,0,0,${overlay.vignette})`);
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, w, h);
+  }
+  if (overlay.tint) {
+    ctx.fillStyle = overlay.tint;
+    ctx.fillRect(0, 0, w, h);
+  }
+  if (overlay.leaks) {
+    const R = Math.max(w, h);
+    overlay.leaks.forEach((leak) => {
+      const cx = leak.x === 0 ? 0 : w;
+      const cy = leak.y === 0 ? 0 : h;
+      const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, R * leak.size);
+      g.addColorStop(0, `rgba(${leak.rgb},${leak.alpha})`);
+      g.addColorStop(1, `rgba(${leak.rgb},0)`);
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, w, h);
+    });
+  }
+  if (overlay.grain) {
+    ctx.save();
+    ctx.globalAlpha = overlay.grain;
+    ctx.globalCompositeOperation = 'overlay';
+    ctx.fillStyle = ctx.createPattern(getGrainCanvas(), 'repeat');
+    ctx.fillRect(0, 0, w, h);
+    ctx.restore();
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Mechanical split-flap countdown — one digit tumbles at a time, like a
 // real departure-board flip clock.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -124,6 +197,7 @@ export default function DispcamApp() {
   const [uploading, setUploading] = useState(false);
   const [timeLeft, setTimeLeft] = useState(0);
   const [rollState, setRollState] = useState('active'); // 'active' | 'collapsing' | 'finished'
+  const [activeFilter, setActiveFilter] = useState('none'); // live film filter id (FILTERS)
   
   // Hardware Camera Viewport Reference Layers
   const videoRef = useRef(null);
@@ -506,7 +580,15 @@ export default function DispcamApp() {
       canvas.height = video.videoHeight || 480;
       
       const ctx = canvas.getContext('2d');
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      // Bake the active filter into the captured photo so it matches the live preview.
+      if (typeof ctx.filter === 'string') {
+        ctx.filter = activeFilterObj.css || 'none';
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        ctx.filter = 'none';
+      } else {
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      }
+      bakeFilterOverlay(ctx, canvas.width, canvas.height, activeFilterObj.overlay);
       
       const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.85));
       if (!blob) {
@@ -901,6 +983,9 @@ export default function DispcamApp() {
       .catch((err) => console.warn('QR generation failed:', err));
   };
 
+  // Active filter object shared by the live preview and the capture bake
+  const activeFilterObj = FILTERS.find((f) => f.id === activeFilter) || FILTERS[0];
+
   return (
     <>
       {/* LANDING PAGE — the new home (skipped when arriving via a ?room= link) */}
@@ -966,6 +1051,14 @@ export default function DispcamApp() {
               radial-gradient(50% 50% at 84% 88%, rgba(0, 0, 0, 0.9), transparent 70%);
           }
           .shutter-3d:hover::before { background: radial-gradient(100% 100% at 50% 0%, #141419, #000); }
+
+          /* Film-grain overlay for the live preview (matches the baked capture) */
+          .film-grain {
+            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+            mix-blend-mode: overlay;
+          }
+          .no-scrollbar { scrollbar-width: none; }
+          .no-scrollbar::-webkit-scrollbar { display: none; }
           @media (prefers-reduced-motion: reduce) {
             .flip-flap-top, .flip-flap-bottom { animation: none; }
           }
@@ -1171,12 +1264,31 @@ export default function DispcamApp() {
               </div>
             </header>
 
-            <div className="w-full aspect-[3/4] border border-[#1C1C1E] bg-black rounded-2xl relative overflow-hidden shadow-inner flex items-center justify-center">
-              <video 
-                ref={videoRef} autoPlay playsInline muted 
-                className="w-full h-full object-cover filter saturate-[1.05] contrast-[1.02]"
+            <div className="w-full aspect-[3/4] max-h-[calc(92vh-190px)] border border-[#1C1C1E] bg-black rounded-2xl relative overflow-hidden shadow-inner flex items-center justify-center">
+              <video
+                ref={videoRef} autoPlay playsInline muted
+                className="w-full h-full object-cover transition-[filter] duration-300"
+                style={{ filter: activeFilterObj.css }}
               />
-              
+
+              {/* live filter overlay layers — mirror the canvas bake so WYSIWYG */}
+              {activeFilterObj.overlay && (
+                <>
+                  {activeFilterObj.overlay.vignette ? (
+                    <div className="absolute inset-0 pointer-events-none" style={{ background: `radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,${activeFilterObj.overlay.vignette}) 100%)` }} />
+                  ) : null}
+                  {activeFilterObj.overlay.tint ? (
+                    <div className="absolute inset-0 pointer-events-none" style={{ background: activeFilterObj.overlay.tint }} />
+                  ) : null}
+                  {(activeFilterObj.overlay.leaks || []).map((leak, i) => (
+                    <div key={i} className="absolute inset-0 pointer-events-none" style={{ background: `radial-gradient(circle at ${leak.x * 100}% ${leak.y * 100}%, rgba(${leak.rgb},${leak.alpha}) 0%, rgba(${leak.rgb},0) 65%)` }} />
+                  ))}
+                  {activeFilterObj.overlay.grain ? (
+                    <div className="absolute inset-0 pointer-events-none film-grain" style={{ opacity: activeFilterObj.overlay.grain }} />
+                  ) : null}
+                </>
+              )}
+
               <div className="absolute top-6 right-6 font-mono text-base tracking-wider text-amber-500 bg-black/80 border border-neutral-800 px-3 py-1 rounded-md backdrop-blur-md">
                 {photoCount} / {getActiveLimit()}
               </div>
@@ -1186,6 +1298,22 @@ export default function DispcamApp() {
                   <p className="text-[11px] tracking-[0.3em] text-amber-500 uppercase">Winding…</p>
                 </div>
               )}
+            </div>
+
+            {/* Live film filters — picked before the shot, baked into the photo */}
+            <div className="w-full flex items-center gap-2 overflow-x-auto no-scrollbar py-1 shrink-0">
+              {FILTERS.map((f) => (
+                <button
+                  key={f.id}
+                  onClick={() => setActiveFilter(f.id)}
+                  aria-pressed={activeFilter === f.id}
+                  className={`shrink-0 flex items-center gap-1.5 rounded-full px-3.5 py-2 text-[10px] uppercase tracking-widest border transition
+                    ${activeFilter === f.id ? 'border-amber-500/70 text-amber-400 bg-amber-500/10' : 'border-[#2C2C2E] text-neutral-500 hover:border-neutral-600 hover:text-neutral-300'}`}
+                >
+                  <span className="w-2 h-2 rounded-full" style={{ background: f.swatch }} />
+                  {f.name}
+                </button>
+              ))}
             </div>
 
             <footer className="w-full flex flex-col items-center space-y-4 pb-2">
