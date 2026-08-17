@@ -7,7 +7,7 @@ const sections = [
   },
   {
     h: '2. What We Collect',
-    body: 'Account information — when you sign in with Google, we receive your email address and display name; when you sign in with a phone number, we store the phone number and a user record. Host details — when you create an event we store the event name, reveal time, shot limit, and the email address you choose for album delivery. Guest details — guests provide their name when joining an event, and may optionally add an email to receive their own developed photos. Photos — the photos taken at an event, which are uploaded to our object storage and associated with the event. Payment information — we do not store card or bank details; payments are processed by Razorpay on your behalf.',
+    body: 'Account information — when you sign in with Google, we receive your email address and display name. Host details — when you create an event we store the event name, reveal time, shot limit, and the email address you choose for album delivery. Guest details — guests provide their name when joining an event, and may optionally add an email to receive their own developed photos. Photos — the photos taken at an event, which are uploaded to our object storage and associated with the event. Payment information — we do not store card or bank details; payments are processed by Razorpay on your behalf.',
   },
   {
     h: '3. How We Use Information',
@@ -23,7 +23,7 @@ const sections = [
   },
   {
     h: '6. Retention & Deletion',
-    body: 'Event records and their photos are retained while the event exists. You can ask us to delete an event (and its photos) at any time by contacting us, and we will remove it from our database and object storage. Account records can be deleted by contacting us or by closing your Google/phone sign-in; photos you took remain part of the event host\u2019s roll until that event is deleted.',
+    body: 'Event records and their photos are retained while the event exists. You can ask us to delete an event (and its photos) at any time by contacting us, and we will remove it from our database and object storage. Account records can be deleted by contacting us or by closing your Google sign-in; photos you took remain part of the event host\u2019s roll until that event is deleted.',
   },
   {
     h: '7. Your Rights',

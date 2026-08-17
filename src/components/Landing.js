@@ -396,7 +396,7 @@ export default function Landing({ onCreateEvent, onChooseTier, onOpenEvents, onO
               </div>
             ) : (
               <button onClick={() => { setMenuOpen(false); onOpenAuth?.(); }} className="w-full border border-[#2C2C2E] text-sm text-neutral-300 py-3 rounded-full hover:border-amber-500/50 transition-colors">
-                Sign in — Google or phone
+                Sign in with Google
               </button>
             )}
             <button onClick={handleCreate} className="w-full bg-white text-black text-sm font-medium py-3 rounded-full">

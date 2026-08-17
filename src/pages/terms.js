@@ -11,7 +11,7 @@ const sections = [
   },
   {
     h: '3. Accounts & Eligibility',
-    body: 'You must be at least 13 years old to use the Service. Creating an event requires a signed-in account (via Google sign-in or phone verification). You are responsible for keeping your login credentials secure and for everything done through your account. Guests do not need an account to take photos, but provide their name to join an event and may optionally add an email to receive their own developed photos.',
+    body: 'You must be at least 13 years old to use the Service. Creating an event requires a signed-in account (via Google sign-in). You are responsible for keeping your login credentials secure and for everything done through your account. Guests do not need an account to take photos, but provide their name to join an event and may optionally add an email to receive their own developed photos.',
   },
   {
     h: '4. Events, Shots & Reveal Timers',

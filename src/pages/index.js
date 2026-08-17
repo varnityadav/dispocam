@@ -255,8 +255,8 @@ export default function DispcamApp() {
   // Recipients already attempted this session (the Worker's R2 marker handles cross-session dedupe)
   const deliveredSetRef = useRef(new Set());
   // Set when a host tries to create an event before signing in — the create
-  // re-fires automatically the moment auth completes (phone OTP) or the form is
-  // restored after the Google redirect returns.
+  // re-fires automatically once the Google sign-in completes and the session
+  // resolves (or the parked form is restored after the redirect).
   const pendingCreateRef = useRef(false);
   const handleCreateEventRef = useRef(null);
 
@@ -271,7 +271,7 @@ export default function DispcamApp() {
   const [user, setUser] = useState(null);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
 
-  // Events library ("Events" view) + auth modal (Google / phone OTP)
+  // Events library ("Events" view) + Google sign-in modal
   const [eventsList, setEventsList] = useState(null);
   const [eventsBusy, setEventsBusy] = useState(false);
   const [eventsError, setEventsError] = useState('');
@@ -279,12 +279,8 @@ export default function DispcamApp() {
   const [myEvents, setMyEvents] = useState(null);
   const [myEventsBusy, setMyEventsBusy] = useState(false);
   const [revealBusyId, setRevealBusyId] = useState('');
-  const [authModal, setAuthModal] = useState('closed'); // 'closed' | 'phone'
-  const [phoneStep, setPhoneStep] = useState('input'); // 'input' | 'otp'
-  const [authPhone, setAuthPhone] = useState('');
-  const [authOtp, setAuthOtp] = useState('');
+  const [authModal, setAuthModal] = useState(false); // Google sign-in modal
   const [authMsg, setAuthMsg] = useState('');
-  const [authBusy, setAuthBusy] = useState(false);
 
   // Intercept incoming room deep links
   useEffect(() => {
@@ -299,6 +295,12 @@ export default function DispcamApp() {
   // Restore any existing Google sign-in session (also completes the OAuth callback)
   useEffect(() => {
     if (!supabase) return;
+    // If the Google flow came back with an error (e.g. the host cancelled on
+    // Google's page — ?error=access_denied), drop the parked create so it can't
+    // auto-fire on some later, unrelated sign-in.
+    if (typeof window !== 'undefined' && window.location.search.includes('error=')) {
+      window.sessionStorage.removeItem('dispocam_pending_create');
+    }
     supabase.auth.getSession().then(({ data }) => {
       if (data?.session) setUser(data.session.user);
     });
@@ -313,9 +315,9 @@ export default function DispcamApp() {
     if (user?.email && !hostEmail) setHostEmail(user.email);
   }, [user]);
 
-  // After a host signs in mid-create: finish the event (phone OTP, in-session)
-  // or restore the form they filled in (Google redirect — sessionStorage survives
-  // the full-page round-trip).
+  // After a host signs in mid-create (Google redirect — sessionStorage survives
+  // the full-page round-trip): restore the form they filled in and finish the
+  // event creation automatically.
   useEffect(() => {
     if (!user) return;
     const pendingRaw =
@@ -330,13 +332,26 @@ export default function DispcamApp() {
     if (pendingRaw) {
       try {
         const pending = JSON.parse(pendingRaw);
+        // Only auto-complete a parked create that is fresh (≤15 min old) — a
+        // marker left from a much earlier abandoned attempt must not fire later.
+        if (pending.eventName && pending.parkedAt && Date.now() - pending.parkedAt > 15 * 60 * 1000) {
+          return;
+        }
         if (pending.eventName) {
+          // Restore the form the host filled in before the Google round-trip,
+          // then finish the create automatically — no second click needed.
           setEventName(pending.eventName);
           setDuration(pending.duration || '2');
           setSelectedTier(pending.selectedTier || 'free');
           setHostEmail(pending.hostEmail || user.email || '');
           setView('host');
           window.history.pushState({ dispcam: true, view: 'host' }, '');
+          handleCreateEventRef.current?.({ preventDefault: () => {} }, {
+            eventName: pending.eventName,
+            duration: pending.duration || '2',
+            selectedTier: pending.selectedTier || 'free',
+            hostEmail: pending.hostEmail || user.email || '',
+          });
         }
       } catch (e) { /* corrupt flag — just drop it */ }
     }
@@ -357,58 +372,19 @@ export default function DispcamApp() {
     await supabase.auth.signOut();
   };
 
-  // ── Phone (OTP) sign-in — needs phone auth enabled in Supabase ────────────
-  const openPhoneAuth = () => {
-    setAuthPhone('');
-    setAuthOtp('');
+  // ── Google sign-in modal (phone OTP removed — Google is the only option) ──
+  const openAuthModal = () => {
     setAuthMsg('');
-    setPhoneStep('input');
-    setAuthModal('phone');
+    setAuthModal(true);
   };
 
   const closeAuthModal = () => {
-    setAuthModal('closed');
+    setAuthModal(false);
     setAuthMsg('');
-    // Don't auto-create later if the host abandoned signing in mid-create
+    // If the host abandoned signing in mid-create, drop the parked form so it
+    // doesn't auto-fire on some later, unrelated sign-in.
     pendingCreateRef.current = false;
     if (typeof window !== 'undefined') window.sessionStorage.removeItem('dispocam_pending_create');
-  };
-
-  const sendPhoneOtp = async (e) => {
-    e.preventDefault();
-    if (!supabase) { setAuthMsg(NOT_CONFIGURED); return; }
-    const phone = authPhone.trim();
-    if (!/^\+[1-9]\d{7,14}$/.test(phone)) {
-      setAuthMsg('Enter a valid phone with country code, e.g. +91 98765 43210');
-      return;
-    }
-    setAuthBusy(true); setAuthMsg('');
-    try {
-      const { error } = await supabase.auth.signInWithOtp({ phone, options: { channel: 'sms' } });
-      if (error) throw error;
-      setPhoneStep('otp');
-      setAuthMsg('Code sent to ' + phone + ' — enter the 6-digit OTP below.');
-    } catch (err) {
-      setAuthMsg('Could not send the code: ' + err.message);
-    } finally {
-      setAuthBusy(false);
-    }
-  };
-
-  const verifyPhoneOtp = async (e) => {
-    e.preventDefault();
-    if (!supabase) { setAuthMsg(NOT_CONFIGURED); return; }
-    if (!authOtp.trim()) { setAuthMsg('Enter the code you received'); return; }
-    setAuthBusy(true); setAuthMsg('');
-    try {
-      const { error } = await supabase.auth.verifyOtp({ phone: authPhone.trim(), token: authOtp.trim(), type: 'sms' });
-      if (error) throw error;
-      closeAuthModal(); // user state updates via onAuthStateChange
-    } catch (err) {
-      setAuthMsg('Verification failed: ' + err.message);
-    } finally {
-      setAuthBusy(false);
-    }
   };
 
   // Make the browser Back button work: each view pushes its own history state,
@@ -575,29 +551,36 @@ export default function DispcamApp() {
     }).then(setQrDataUrl).catch((err) => console.warn('QR generation failed:', err));
   };
 
-  const handleCreateEvent = async (e) => {
+  const handleCreateEvent = async (e, overrides = {}) => {
     e.preventDefault();
-    if (!eventName) return;
+    // overrides are passed when the create auto-finishes after the Google
+    // sign-in round-trip — they win over live state.
+    const name = String(overrides.eventName ?? eventName).trim();
+    const dur = String(overrides.duration ?? duration);
+    const tierId = overrides.selectedTier ?? selectedTier;
+    const emailValue = String(overrides.hostEmail ?? hostEmail).trim();
+    if (!name) return;
     setQrDataUrl('');
     setPayError('');
 
     // Creating an event now requires sign-in (RLS is owner-scoped). If the host
-    // isn't signed in yet, park the form and open auth — Google continues after
-    // the redirect, phone OTP continues automatically in-session.
+    // isn't signed in yet, park the form and open the Google sign-in modal — the
+    // create continues automatically once the redirect returns.
     if (!user) {
       pendingCreateRef.current = true;
       window.sessionStorage.setItem('dispocam_pending_create', JSON.stringify({
-        eventName, duration, selectedTier, hostEmail,
+        eventName: name, duration: dur, selectedTier: tierId, hostEmail: emailValue,
+        parkedAt: Date.now(),
       }));
-      openPhoneAuth();
+      openAuthModal();
       setAuthMsg('Sign in to create your film roll — Google takes 10 seconds.');
       return;
     }
 
     const revealAt = new Date();
-    revealAt.setHours(revealAt.getHours() + parseInt(duration));
-    const tier = TIERS[selectedTier];
-    const albumEmail = hostEmail.trim() ? hostEmail.trim().toLowerCase() : null;
+    revealAt.setHours(revealAt.getHours() + parseInt(dur));
+    const tier = TIERS[tierId];
+    const albumEmail = emailValue.trim() ? emailValue.trim().toLowerCase() : null;
     if (albumEmail && !EMAIL_RE.test(albumEmail)) {
       setPayError('Please enter a valid album email');
       return;
@@ -611,7 +594,7 @@ export default function DispcamApp() {
         let { data, error } = await supabase
           .from('events')
           .insert({
-            name: eventName,
+            name,
             reveal_at: revealAt.toISOString(),
             max_photos_limit: tier.shots,
             max_guests: tier.guests,
@@ -627,7 +610,7 @@ export default function DispcamApp() {
           const retry = await supabase
             .from('events')
             .insert({
-              name: eventName,
+              name,
               reveal_at: revealAt.toISOString(),
               max_photos_limit: tier.shots,
               ...(albumEmail ? { host_email: albumEmail } : {})
@@ -650,7 +633,7 @@ export default function DispcamApp() {
       const orderRes = await fetch(`${R2_WORKER_URL}/create-order`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tier: selectedTier, eventName }),
+        body: JSON.stringify({ tier: tierId, eventName: name }),
       });
       const order = await orderRes.json();
       if (!orderRes.ok || order.error) throw new Error(order.error || 'Could not start payment');
@@ -673,9 +656,9 @@ export default function DispcamApp() {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                eventName,
+                eventName: name,
                 revealAt: revealAt.toISOString(),
-                tier: selectedTier,
+                tier: tierId,
                 orderId: res.razorpay_order_id,
                 paymentId: res.razorpay_payment_id,
                 signature: res.razorpay_signature,
@@ -1199,7 +1182,7 @@ export default function DispcamApp() {
     <>
       {/* LANDING PAGE — the new home (skipped when arriving via a ?room= link) */}
       {view === 'landing' && (
-        <Landing onCreateEvent={handleEnterApp} onChooseTier={handleChooseTier} onOpenEvents={openEvents} onOpenAuth={openPhoneAuth} user={user} onSignOut={handleSignOut} />
+        <Landing onCreateEvent={handleEnterApp} onChooseTier={handleChooseTier} onOpenEvents={openEvents} onOpenAuth={openAuthModal} user={user} onSignOut={handleSignOut} />
       )}
 
       {/* APP VIEWS */}
@@ -1862,8 +1845,8 @@ export default function DispcamApp() {
       </div>
       )}
 
-      {/* AUTH MODAL — Google or phone OTP */}
-      {authModal === 'phone' && (
+      {/* AUTH MODAL — Google sign-in */}
+      {authModal && (
         <div className="fixed inset-0 z-[100] bg-black/75 backdrop-blur-sm flex items-center justify-center p-4" onClick={closeAuthModal}>
           <div className="w-full max-w-sm bg-[#121214] border border-[#2C2C2E] rounded-3xl p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-5">
@@ -1879,49 +1862,9 @@ export default function DispcamApp() {
               Continue with Google
             </button>
 
-            <div className="flex items-center gap-3 my-4 text-[10px] uppercase tracking-widest text-neutral-600">
-              <span className="flex-1 h-px bg-[#2C2C2E]" /> or <span className="flex-1 h-px bg-[#2C2C2E]" />
-            </div>
-
-            {phoneStep === 'input' ? (
-              <form onSubmit={sendPhoneOtp} className="space-y-3">
-                <input
-                  type="tel"
-                  required
-                  placeholder="+91 98765 43210"
-                  value={authPhone}
-                  onChange={(e) => setAuthPhone(e.target.value)}
-                  className="w-full bg-[#1A1A1E] border border-[#2C2C2E] rounded-xl px-4 py-3 text-sm text-white text-center focus:outline-none focus:border-amber-500/50 transition"
-                />
-                <button
-                  disabled={authBusy}
-                  className="w-full bg-amber-400 text-black font-semibold py-3 rounded-xl text-sm hover:bg-amber-300 transition disabled:opacity-50"
-                >
-                  {authBusy ? 'Sending…' : 'Send code by SMS'}
-                </button>
-              </form>
-            ) : (
-              <form onSubmit={verifyPhoneOtp} className="space-y-3">
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  required
-                  placeholder="6-digit code"
-                  value={authOtp}
-                  onChange={(e) => setAuthOtp(e.target.value.replace(/\D/g, ''))}
-                  className="w-full bg-[#1A1A1E] border border-[#2C2C2E] rounded-xl px-4 py-3 text-sm text-white text-center tracking-[0.4em] focus:outline-none focus:border-amber-500/50 transition"
-                />
-                <button
-                  disabled={authBusy}
-                  className="w-full bg-amber-400 text-black font-semibold py-3 rounded-xl text-sm hover:bg-amber-300 transition disabled:opacity-50"
-                >
-                  {authBusy ? 'Verifying…' : 'Verify & Sign in'}
-                </button>
-                <button type="button" onClick={() => setPhoneStep('input')} className="w-full text-[11px] text-neutral-500 hover:text-neutral-300 transition">
-                  ← Change number
-                </button>
-              </form>
-            )}
+            <p className="mt-4 text-center text-[11px] text-neutral-500 leading-relaxed">
+              One-tap sign-in with Google — no passwords, no SMS codes.
+            </p>
 
             {authMsg && <p className="mt-4 text-[11px] text-amber-300/90 leading-relaxed">{authMsg}</p>}
           </div>
