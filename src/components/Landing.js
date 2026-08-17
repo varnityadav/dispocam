@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import QRCode from 'qrcode';
-import { TIER_LIST as PRICING } from '../lib/pricing';
+import { TIER_LIST as PRICING, CUSTOM_GUESTS, CUSTOM_SHOTS, calcCustomPrice } from '../lib/pricing';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Photography:
@@ -151,6 +151,8 @@ export default function Landing({ onCreateEvent, onChooseTier, onOpenEvents, onO
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [openFaq, setOpenFaq] = useState(0);
   const [siteQr, setSiteQr] = useState('');
+  const [customGuests, setCustomGuests] = useState(50);
+  const [customShots, setCustomShots] = useState(25);
   const progressRef = useRef(null);
 
   // Real QR code for the site (decorative touch inside "Invite your people")
@@ -226,6 +228,11 @@ export default function Landing({ onCreateEvent, onChooseTier, onOpenEvents, onO
   const handleChooseTier = (id) => {
     if (typeof window !== 'undefined') window.scrollTo(0, 0);
     onChooseTier?.(id);
+  };
+
+  const handleChooseCustom = () => {
+    if (typeof window !== 'undefined') window.scrollTo(0, 0);
+    onChooseTier?.({ id: 'custom', guests: customGuests, shots: customShots });
   };
 
   return (
@@ -588,21 +595,26 @@ export default function Landing({ onCreateEvent, onChooseTier, onOpenEvents, onO
             <span className="font-serif-accent text-amber-400/90">Priced for the size of your day.</span>
           </h2>
           <p data-reveal-rise data-delay="160" className="mt-5 text-neutral-400 max-w-xl text-sm md:text-base leading-relaxed">
-            Events up to 5 guests are free forever. Beyond that everyone gets 25 shots each — and the bigger
-            the event, the less each guest costs you.
+            Events up to 5 guests are free forever. Pick a bundle for the standard crew sizes, or build a
+            custom roll — the bigger the event, the less each guest costs you.
           </p>
 
-          <div className="mt-14 grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="mt-14 grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {PRICING.map((p, i) => (
               <div
                 key={p.id}
                 data-reveal-rise
                 data-delay={i * 80}
-                className={`relative rounded-2xl border p-6 flex flex-col transition-colors duration-500 ${p.price === 0 ? 'border-emerald-500/40 bg-emerald-500/[0.04]' : 'border-[#1C1C1E] bg-[#121214] hover:border-amber-500/40'}`}
+                className={`relative rounded-2xl border p-6 flex flex-col transition-colors duration-500 ${p.price === 0 ? 'border-emerald-500/40 bg-emerald-500/[0.04]' : p.id === 'standard' ? 'border-amber-500/50 bg-amber-500/[0.04]' : 'border-[#1C1C1E] bg-[#121214] hover:border-amber-500/40'}`}
               >
                 {p.price === 0 && (
                   <span className="absolute -top-2.5 left-5 text-[10px] uppercase tracking-widest bg-emerald-500 text-black font-bold px-2.5 py-1 rounded-full">
                     Free forever
+                  </span>
+                )}
+                {p.id === 'standard' && (
+                  <span className="absolute -top-2.5 right-5 text-[10px] uppercase tracking-widest bg-white text-black font-bold px-2.5 py-1 rounded-full">
+                    Most popular
                   </span>
                 )}
                 <p className="font-display text-2xl text-white">{p.guests} guests</p>
@@ -624,6 +636,62 @@ export default function Landing({ onCreateEvent, onChooseTier, onOpenEvents, onO
                 </button>
               </div>
             ))}
+          </div>
+
+          {/* Custom roll builder — pick guests & shots, price computed live */}
+          <div
+            data-reveal-rise
+            data-delay="200"
+            className="mt-6 rounded-2xl border border-dashed border-amber-500/30 bg-[#121214] p-6 md:p-8"
+          >
+            <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
+              <div>
+                <p className="font-display text-xl text-white">Build your own roll</p>
+                <p className="mt-1 text-sm text-neutral-500 max-w-md leading-relaxed">
+                  Need a size between the bundles? Pick any guest count and shots per guest — the price is
+                  computed automatically.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-end gap-3">
+                <div>
+                  <label className="block text-[10px] uppercase tracking-wider text-neutral-500 mb-1.5">Guests</label>
+                  <select
+                    value={customGuests}
+                    onChange={(e) => setCustomGuests(Number(e.target.value))}
+                    className="bg-[#1A1A1E] border border-[#2C2C2E] rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-amber-500/50"
+                  >
+                    {CUSTOM_GUESTS.map((g) => (
+                      <option key={g} value={g}>{g}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[10px] uppercase tracking-wider text-neutral-500 mb-1.5">Shots per guest</label>
+                  <select
+                    value={customShots}
+                    onChange={(e) => setCustomShots(Number(e.target.value))}
+                    className="bg-[#1A1A1E] border border-[#2C2C2E] rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-amber-500/50"
+                  >
+                    {CUSTOM_SHOTS.map((s) => (
+                      <option key={s} value={s}>{s}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="text-right lg:pb-0.5">
+                  <p className="text-[10px] uppercase tracking-wider text-neutral-500">Total</p>
+                  <p className={`font-display text-2xl ${calcCustomPrice(customGuests, customShots) === 0 ? 'text-emerald-400' : 'text-amber-400'}`}>
+                    {calcCustomPrice(customGuests, customShots) === 0 ? '₹0' : `₹${calcCustomPrice(customGuests, customShots).toLocaleString('en-IN')}`}
+                  </p>
+                  {customGuests <= 5 && <p className="text-[10px] text-emerald-400">free forever</p>}
+                </div>
+                <button
+                  onClick={handleChooseCustom}
+                  className="bg-amber-400 text-black text-sm font-semibold px-6 py-3 rounded-full transition-all hover:bg-amber-300 hover:scale-[1.02] active:scale-[0.98]"
+                >
+                  Build my roll
+                </button>
+              </div>
+            </div>
           </div>
           <p data-reveal-rise className="mt-8 text-[11px] text-neutral-600 text-center max-w-2xl mx-auto leading-relaxed">
             Every plan includes the permanent QR, the shared film roll, album emails, and the full gallery.

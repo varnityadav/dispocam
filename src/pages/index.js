@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, Fragment } from 'react';
 import QRCode from 'qrcode';
 import { supabase } from '../lib/supabase';
 import Landing from '../components/Landing';
-import { TIERS, TIER_LIST } from '../lib/pricing';
+import { TIERS, TIER_LIST, CUSTOM_GUESTS, CUSTOM_SHOTS, calcCustomPrice, resolveTier } from '../lib/pricing';
 
 // Cloudflare R2 upload worker — signs presigned URLs for direct browser uploads.
 // Set via NEXT_PUBLIC_R2_WORKER_URL in .env.local (deploy from /workers).
@@ -215,6 +215,8 @@ export default function DispcamApp() {
   const [eventName, setEventName] = useState('');
   const [duration, setDuration] = useState('2');
   const [selectedTier, setSelectedTier] = useState('free');
+  const [customGuests, setCustomGuests] = useState(50);
+  const [customShots, setCustomShots] = useState(25);
   const [hostEmail, setHostEmail] = useState(''); // where the host's full album goes
   const [paying, setPaying] = useState(false);
   const [payError, setPayError] = useState('');
@@ -343,6 +345,8 @@ export default function DispcamApp() {
           setEventName(pending.eventName);
           setDuration(pending.duration || '2');
           setSelectedTier(pending.selectedTier || 'free');
+          setCustomGuests(pending.customGuests || 50);
+          setCustomShots(pending.customShots || 25);
           setHostEmail(pending.hostEmail || user.email || '');
           setView('host');
           window.history.pushState({ dispcam: true, view: 'host' }, '');
@@ -350,6 +354,8 @@ export default function DispcamApp() {
             eventName: pending.eventName,
             duration: pending.duration || '2',
             selectedTier: pending.selectedTier || 'free',
+            customGuests: pending.customGuests || 50,
+            customShots: pending.customShots || 25,
             hostEmail: pending.hostEmail || user.email || '',
           });
         }
@@ -559,6 +565,8 @@ export default function DispcamApp() {
     const dur = String(overrides.duration ?? duration);
     const tierId = overrides.selectedTier ?? selectedTier;
     const emailValue = String(overrides.hostEmail ?? hostEmail).trim();
+    const customGuestsVal = Number(overrides.customGuests ?? customGuests);
+    const customShotsVal = Number(overrides.customShots ?? customShots);
     if (!name) return;
     setQrDataUrl('');
     setPayError('');
@@ -569,8 +577,9 @@ export default function DispcamApp() {
     if (!user) {
       pendingCreateRef.current = true;
       window.sessionStorage.setItem('dispocam_pending_create', JSON.stringify({
-        eventName: name, duration: dur, selectedTier: tierId, hostEmail: emailValue,
-        parkedAt: Date.now(),
+        eventName: name, duration: dur, selectedTier: tierId,
+        customGuests: customGuestsVal, customShots: customShotsVal,
+        hostEmail: emailValue, parkedAt: Date.now(),
       }));
       openAuthModal();
       setAuthMsg('Sign in to create your film roll — Google takes 10 seconds.');
@@ -579,7 +588,8 @@ export default function DispcamApp() {
 
     const revealAt = new Date();
     revealAt.setHours(revealAt.getHours() + parseInt(dur));
-    const tier = TIERS[tierId];
+    const tier = resolveTier(tierId, customGuestsVal, customShotsVal);
+    if (!tier) { setPayError('Please choose a valid plan'); return; }
     const albumEmail = emailValue.trim() ? emailValue.trim().toLowerCase() : null;
     if (albumEmail && !EMAIL_RE.test(albumEmail)) {
       setPayError('Please enter a valid album email');
@@ -633,7 +643,7 @@ export default function DispcamApp() {
       const orderRes = await fetch(`${R2_WORKER_URL}/create-order`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tier: tierId, eventName: name }),
+        body: JSON.stringify({ tier: tierId, eventName: name, guests: tier.guests, shots: tier.shots }),
       });
       const order = await orderRes.json();
       if (!orderRes.ok || order.error) throw new Error(order.error || 'Could not start payment');
@@ -664,6 +674,8 @@ export default function DispcamApp() {
                 signature: res.razorpay_signature,
                 hostEmail: albumEmail,
                 ownerId: user?.id,
+                guests: tier.guests,
+                shots: tier.shots,
               }),
             });
             const v = await vRes.json();
@@ -1050,9 +1062,17 @@ export default function DispcamApp() {
     }
   };
 
-  // Landing pricing buttons jump straight to the host form with the tier preselected
-  const handleChooseTier = (id) => {
-    setSelectedTier(TIERS[id] ? id : 'free');
+  // Landing pricing buttons jump straight to the host form with the tier preselected.
+  // Accepts a bundle id ('free'|'standard'|'premium') or a custom descriptor
+  // { id: 'custom', guests, shots }.
+  const handleChooseTier = (sel) => {
+    if (sel && typeof sel === 'object') {
+      setSelectedTier(TIERS[sel.id] ? sel.id : 'custom');
+      if (sel.guests) setCustomGuests(Number(sel.guests));
+      if (sel.shots) setCustomShots(Number(sel.shots));
+    } else {
+      setSelectedTier(TIERS[sel] ? sel : 'free');
+    }
     handleEnterApp();
   };
 
@@ -1324,7 +1344,7 @@ export default function DispcamApp() {
 
               <div>
                 <label className="block text-xs uppercase tracking-wider text-neutral-400 mb-2 font-medium">Event Capacity</label>
-                <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                <div className="space-y-2">
                   {TIER_LIST.map((t) => (
                     <button
                       type="button"
@@ -1342,6 +1362,60 @@ export default function DispcamApp() {
                       </p>
                     </button>
                   ))}
+
+                  {/* Custom roll — pick your own guests & shots */}
+                  <div
+                    className={`rounded-xl border transition ${selectedTier === 'custom' ? 'border-amber-500/60 bg-amber-500/5' : 'border-[#2C2C2E] hover:border-neutral-600'}`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setSelectedTier('custom')}
+                      className="w-full flex items-center justify-between px-4 py-2.5 text-left"
+                    >
+                      <div>
+                        <p className="text-sm text-white font-medium">Custom roll</p>
+                        <p className="text-[11px] text-neutral-500">Pick your own guests & shots</p>
+                      </div>
+                      <p className="text-sm font-semibold text-amber-400">
+                        ₹{calcCustomPrice(customGuests, customShots).toLocaleString('en-IN')}
+                      </p>
+                    </button>
+                    {selectedTier === 'custom' && (
+                      <div className="px-4 pb-4">
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-[10px] uppercase tracking-wider text-neutral-500 mb-1.5">Guests</label>
+                            <select
+                              value={customGuests}
+                              onChange={(e) => setCustomGuests(Number(e.target.value))}
+                              className="w-full bg-[#1A1A1E] border border-[#2C2C2E] rounded-lg px-3 py-2 text-sm text-white focus:outline-none"
+                            >
+                              {CUSTOM_GUESTS.map((g) => (
+                                <option key={g} value={g}>{g}</option>
+                              ))}
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-[10px] uppercase tracking-wider text-neutral-500 mb-1.5">Shots per guest</label>
+                            <select
+                              value={customShots}
+                              onChange={(e) => setCustomShots(Number(e.target.value))}
+                              className="w-full bg-[#1A1A1E] border border-[#2C2C2E] rounded-lg px-3 py-2 text-sm text-white focus:outline-none"
+                            >
+                              {CUSTOM_SHOTS.map((s) => (
+                                <option key={s} value={s}>{s}</option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+                        <p className="mt-3 text-[11px] text-neutral-500 leading-relaxed">
+                          {customGuests <= 5
+                            ? `${customGuests} guests × ${customShots} shots each — free forever`
+                            : `${customGuests} guests × ${customShots} shots each = ₹${calcCustomPrice(customGuests, customShots).toLocaleString('en-IN')} per event`}
+                        </p>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -1352,9 +1426,9 @@ export default function DispcamApp() {
               >
                 {paying
                   ? 'Opening secure payment…'
-                  : selectedTier === 'free'
+                  : (selectedTier === 'custom' ? calcCustomPrice(customGuests, customShots) : (TIERS[selectedTier]?.price ?? 0)) === 0
                   ? 'Generate Film Roll — Free'
-                  : `Pay ₹${TIERS[selectedTier].price.toLocaleString('en-IN')} & Create Event`}
+                  : `Pay ₹${(selectedTier === 'custom' ? calcCustomPrice(customGuests, customShots) : TIERS[selectedTier].price).toLocaleString('en-IN')} & Create Event`}
               </button>
               {payError && (
                 <p className="text-xs text-red-400 text-center leading-relaxed">{payError}</p>
@@ -1800,7 +1874,7 @@ export default function DispcamApp() {
               {eventsList.map((ev) => {
                 const developed = new Date() > new Date(ev.reveal_at);
                 const link = `${typeof window !== 'undefined' ? window.location.origin : ''}?room=${ev.id}`;
-                const tierLabel = ev.plan === 'free' ? 'Free roll' : TIERS[ev.plan] ? `${ev.max_guests} guests · paid` : ev.plan;
+                const tierLabel = ev.plan === 'free' ? 'Free roll' : ev.plan === 'custom' ? `${ev.max_guests} guests · custom` : TIERS[ev.plan] ? `${ev.max_guests} guests · paid` : ev.plan;
                 return (
                   <div key={ev.id} className="rounded-2xl border border-[#1C1C1E] bg-[#121214] overflow-hidden flex flex-col hover:border-amber-500/40 transition-colors duration-500">
                     <button onClick={() => evaluateRoomRoute(ev.id)} className="text-left p-5 flex-1 group">

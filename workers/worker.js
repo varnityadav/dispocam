@@ -34,19 +34,61 @@ const corsHeaders = {
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-// Pricing tiers — free forever up to 5 guests, then paid capacity with 25 shots
-// per guest at a declining per-guest price (approved by the founder).
-// ⚠️ Mirrored in src/lib/pricing.js (TIERS) — keep both in sync when pricing changes.
+// Pricing tiers — free forever up to 5 guests, then paid bundles, plus a custom
+// builder that interpolates between the bulk breakpoints below.
+// ⚠️ Mirrored in src/lib/pricing.js — keep both in sync when pricing changes.
 const TIERS = {
-  free: { guests: 5, shots: 5, price: 0 },
-  t50: { guests: 50, shots: 25, price: 1799 },
-  t100: { guests: 100, shots: 25, price: 3499 },
-  t150: { guests: 150, shots: 25, price: 4799 },
-  t200: { guests: 200, shots: 25, price: 5799 },
-  t250: { guests: 250, shots: 25, price: 6899 },
-  t300: { guests: 300, shots: 25, price: 7999 },
-  t350: { guests: 350, shots: 25, price: 8999 },
+  free: { guests: 5, shots: 5, price: 0, label: 'Free' },
+  standard: { guests: 50, shots: 25, price: 1799, label: 'Standard' },
+  premium: { guests: 150, shots: 25, price: 4799, label: 'Premium' },
 };
+
+// Allowed custom-builder values (mirrors src/lib/pricing.js). The Worker only
+// accepts these exact values so a client can't underpay with a forged combo.
+const VALID_GUESTS = [5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 100, 125, 150, 175, 200];
+const VALID_SHOTS = [10, 15, 20, 25, 30];
+
+// Interpolation anchors: the free tier (5 guests → ₹0) plus the bulk
+// breakpoints, so the price curve stays monotonic (more guests = less each).
+const BREAKPOINTS = [
+  { guests: 5, price: 0 },
+  { guests: 50, price: 1799 },
+  { guests: 100, price: 3499 },
+  { guests: 150, price: 4799 },
+  { guests: 200, price: 5799 },
+];
+const BASE_SHOTS = 25;
+
+/** Linear interpolation between breakpoints, scaled by the shot count. */
+function calcCustomPrice(guests, shots) {
+  if (guests <= 5) return 0;
+  let low = BREAKPOINTS[0];
+  let high = BREAKPOINTS[BREAKPOINTS.length - 1];
+  for (let i = 0; i < BREAKPOINTS.length - 1; i++) {
+    if (guests >= BREAKPOINTS[i].guests && guests <= BREAKPOINTS[i + 1].guests) {
+      low = BREAKPOINTS[i];
+      high = BREAKPOINTS[i + 1];
+      break;
+    }
+  }
+  if (guests > high.guests) {
+    low = BREAKPOINTS[BREAKPOINTS.length - 2];
+    high = BREAKPOINTS[BREAKPOINTS.length - 1];
+  }
+  const fraction = (high.guests - low.guests) > 0 ? (guests - low.guests) / (high.guests - low.guests) : 0;
+  return Math.round((low.price + (high.price - low.price) * fraction) * (shots / BASE_SHOTS));
+}
+
+/** Resolve a tier selector to a concrete tier, validating custom combos. */
+function resolveTier(tierId, guests, shots) {
+  if (tierId === 'custom') {
+    const g = Number(guests);
+    const s = Number(shots);
+    if (!Number.isInteger(g) || !Number.isInteger(s) || !VALID_GUESTS.includes(g) || !VALID_SHOTS.includes(s)) return null;
+    return { id: 'custom', guests: g, shots: s, price: calcCustomPrice(g, s), label: 'Custom' };
+  }
+  return TIERS[tierId];
+}
 
 // Verify a Razorpay checkout signature: HMAC-SHA256(order_id|payment_id, key_secret) in hex.
 async function verifyRazorpaySignature(secret, orderId, paymentId, signature) {
@@ -73,16 +115,16 @@ async function razorpayGet(env, path) {
   return body;
 }
 
-async function createRazorpayOrder(env, { tier, eventName }) {
+async function createRazorpayOrder(env, { tier, eventName, amountPaise }) {
   const basic = btoa(`${env.RAZORPAY_KEY_ID}:${env.RAZORPAY_KEY_SECRET}`);
   const res = await fetch('https://api.razorpay.com/v1/orders', {
     method: 'POST',
     headers: { Authorization: `Basic ${basic}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      amount: TIERS[tier].price * 100, // paise
+      amount: amountPaise,
       currency: 'INR',
       receipt: `dispocam_${Date.now()}`,
-      notes: { tier, eventName },
+      notes: { tier: tier.id, eventName },
     }),
   });
   const order = await res.json();
@@ -262,16 +304,16 @@ export default {
       }
     }
 
-    // POST /create-order  body: { tier, eventName }  ->  { orderId, amount, currency, keyId, tier }
+    // POST /create-order  body: { tier, eventName, guests, shots }  ->  { orderId, amount, currency, keyId, tier }
     if (url.pathname === '/create-order' && request.method === 'POST') {
       try {
-        const { tier, eventName } = await request.json();
-        const t = TIERS[tier];
+        const { tier, eventName, guests, shots } = await request.json();
+        const t = resolveTier(tier, guests, shots);
         if (!t || t.price <= 0) return json({ error: 'Invalid tier' }, 400);
         if (!eventName || typeof eventName !== 'string' || eventName.length > 60) {
           return json({ error: 'Invalid event name' }, 400);
         }
-        const order = await createRazorpayOrder(env, { tier, eventName: String(eventName).slice(0, 60) });
+        const order = await createRazorpayOrder(env, { tier: t, eventName: String(eventName).slice(0, 60), amountPaise: t.price * 100 });
         return json({ orderId: order.id, amount: order.amount, currency: order.currency, keyId: env.RAZORPAY_KEY_ID, tier: t });
       } catch (err) {
         return json({ error: err.message }, 500);
@@ -283,8 +325,8 @@ export default {
     // (capacity is server-set from the tier — clients can't inflate it).
     if (url.pathname === '/verify-payment' && request.method === 'POST') {
       try {
-        const { eventName, revealAt, tier, orderId, paymentId, signature, hostEmail, ownerId } = await request.json();
-        const t = TIERS[tier];
+        const { eventName, revealAt, tier, orderId, paymentId, signature, hostEmail, ownerId, guests, shots } = await request.json();
+        const t = resolveTier(tier, guests, shots);
         if (!t || t.price <= 0) return json({ error: 'Invalid tier' }, 400);
         if (!eventName || typeof eventName !== 'string' || eventName.length > 60) {
           return json({ error: 'Invalid event name' }, 400);
